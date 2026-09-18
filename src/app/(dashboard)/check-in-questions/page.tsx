@@ -1,0 +1,185 @@
+"use client";
+
+/**
+ * `/check-in-questions` — the dashboard configuration surface for the check-in question registry
+ * (agents.md §10.9 task 7).
+ *
+ * --------------------------------------------------------------------------------------------
+ * What this screen is, and — just as load-bearingly — what it is not
+ * --------------------------------------------------------------------------------------------
+ * This reads `GET /checkins/question-sets/active` (`kayla.checkin.router`, built by a separate
+ * task in this same phase) and renders the org's currently-active question set: which construct
+ * each question asks about, what shape the answer takes, and which milestone days it fires on.
+ * It is **not** the Signals results-visualization dashboard (P11, agents.md §10.11) — no worker
+ * response ever appears here, scored or free-text, aggregated or otherwise. This screen only
+ * shows *which questions are asked*, never any answer to one. Nothing here imports from
+ * `kayla.checkin.constructs` or any equivalent — see `checkin-question-card.tsx`'s own docstring
+ * for why that would defeat this phase's own fitness test.
+ *
+ * --------------------------------------------------------------------------------------------
+ * Read-only, deliberately, matching what actually exists on the backend
+ * --------------------------------------------------------------------------------------------
+ * `kayla.checkin.router`'s own module docstring is explicit that this phase ships no write
+ * endpoint for the registry — the schema and read path only, with an add/remove/reorder/toggle
+ * surface deferred until `Q-25` (per-org question sets) is answered and an org actually needs a
+ * second configuration. There is nothing to wire a toggle or a drag handle to yet, so this screen
+ * has none: building one against an endpoint that does not exist would be exactly the "fake write
+ * functionality" this task was told not to build. The moment a write endpoint lands, this file is
+ * where it gets wired in — the page already renders the full ordered list a reorder/toggle UI
+ * would operate on.
+ *
+ * --------------------------------------------------------------------------------------------
+ * Fetch pattern
+ * --------------------------------------------------------------------------------------------
+ * A client component for the same reason `/cohorts` and `/knowledge-base` are (`src/api/
+ * client.ts`'s session lives in memory only; `DashboardShell` has already confirmed a session
+ * before this page mounts). Uses `apiRequest` against the generated client — unlike
+ * `/knowledge-base` at the time it was written, `GET /checkins/question-sets/active` **is**
+ * already in `kayla-backend/openapi.json` (the other P9 task that built the router regenerated
+ * it), so `npm run codegen` was re-run against that file before this page was written and there
+ * is no hand-rolled-fetch fallback here.
+ *
+ * i18n (agents.md §11.2 check 12, §8.4): every other file in this route group
+ * (`/cohorts/page.tsx`, `/knowledge-base/page.tsx`) hardcodes its user-facing copy as plain
+ * English JSX text — `next-intl` (agents.md §3.2's stated choice) is not installed in
+ * `kayla-frontend` and no `messages/{en,es}.json` pair exists here despite §8.4's "EN + ES ship
+ * together from P4." That gap predates this task and spans every dashboard screen, not just this
+ * one; retrofitting i18n for one new screen while every existing one stays English-only would
+ * make this file inconsistent with its own siblings without closing the gap it is part of. This
+ * file follows the convention that actually exists on disk — see this task's own final report for
+ * the gap named explicitly, with the fix scoped to whichever phase reconciles it for the whole
+ * dashboard at once.
+ */
+
+import { useEffect, useState } from "react";
+
+import { ApiError, CLIENT_ERROR_CODES, apiRequest } from "@/api/client";
+import { CheckinQuestionCard } from "@/components/checkin-question-card";
+import type { CheckinQuestion } from "@/components/checkin-question-card";
+
+type LoadState =
+  | { readonly status: "loading" }
+  | { readonly status: "error"; readonly message: string }
+  | { readonly status: "empty" }
+  | { readonly status: "loaded"; readonly version: number; readonly questions: readonly CheckinQuestion[] };
+
+const GENERIC_FAILURE = "Could not load the check-in question set. Try again in a moment.";
+const FORBIDDEN_MESSAGE =
+  "You do not have access to this page. Check-in question settings are visible to HR admins and org owners only.";
+
+/** `kayla.checkin.service.CheckinQuestionSetNotFoundError.code` — every seeded org gets a v1 set
+ * (agents.md §10.9 task 2), so this is expected only for an org this phase's seeds never reached,
+ * not a failure worth an alert. */
+const NO_ACTIVE_SET_CODE = "checkin_question_set_not_found";
+
+function messageFor(error: unknown): string {
+  if (error instanceof ApiError) {
+    if (
+      error.code === CLIENT_ERROR_CODES.networkUnreachable ||
+      error.code === CLIENT_ERROR_CODES.responseNotUnderstood
+    ) {
+      return "Kayla is not reachable right now. Try again in a moment.";
+    }
+    if (error.code === "forbidden") {
+      return FORBIDDEN_MESSAGE;
+    }
+    return error.message || GENERIC_FAILURE;
+  }
+  return GENERIC_FAILURE;
+}
+
+export default function CheckInQuestionsPage() {
+  const [state, setState] = useState<LoadState>({ status: "loading" });
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load() {
+      try {
+        const questionSet = await apiRequest("get", "/checkins/question-sets/active", {});
+        if (cancelled) return;
+        setState({
+          status: "loaded",
+          version: questionSet.version,
+          // The API already orders by `display_order` (`ActiveQuestionSetResponse`'s own
+          // docstring) — sorted again here defensively, since this screen's whole point is
+          // accurate ordering and a future backend change to that guarantee should not silently
+          // reshuffle the list a reorder UI will eventually operate on.
+          questions: [...questionSet.questions].sort((a, b) => a.display_order - b.display_order),
+        });
+      } catch (error) {
+        if (cancelled) return;
+        if (error instanceof ApiError && error.code === NO_ACTIVE_SET_CODE) {
+          setState({ status: "empty" });
+          return;
+        }
+        setState({ status: "error", message: messageFor(error) });
+      }
+    }
+
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return (
+    <div className="mx-auto flex w-full max-w-5xl flex-col gap-24 p-32">
+      <div className="flex flex-col gap-8">
+        <p className="text-eyebrow font-bold uppercase tracking-eyebrow text-text-secondary">
+          Check-in Questions
+        </p>
+        <h1 className="text-display-2 text-text-primary">Check-in Questions</h1>
+        <p className="max-w-md text-body text-text-secondary">
+          What Kayla asks new hires at each milestone check-in, and when. This view shows the
+          current, active question set for this organization. Editing is not available yet.
+        </p>
+      </div>
+
+      {state.status === "loading" ? (
+        <p role="status" className="text-body text-text-secondary">
+          Loading the question set…
+        </p>
+      ) : null}
+
+      {state.status === "error" ? (
+        <div
+          role="alert"
+          className="flex flex-col gap-4 rounded-card border border-status-critical bg-status-critical-subtle p-16"
+        >
+          <p className="text-label font-bold text-text-primary">
+            Could not load the check-in question set.
+          </p>
+          <p className="text-copy text-text-primary">{state.message}</p>
+        </div>
+      ) : null}
+
+      {state.status === "empty" ? (
+        <p className="text-body text-text-secondary">
+          No active check-in question set is configured for this organization yet.
+        </p>
+      ) : null}
+
+      {state.status === "loaded" ? (
+        <div className="flex flex-col gap-16">
+          <p className="text-meta font-medium text-text-tertiary">
+            {`Question set v${state.version} · ${state.questions.length} question${
+              state.questions.length === 1 ? "" : "s"
+            }`}
+          </p>
+          {state.questions.length === 0 ? (
+            <p className="text-body text-text-secondary">
+              This question set has no questions configured.
+            </p>
+          ) : (
+            <ul aria-label="Check-in questions" className="flex list-none flex-col gap-16 p-0">
+              {state.questions.map((question, index) => (
+                <CheckinQuestionCard key={question.id} question={question} position={index + 1} />
+              ))}
+            </ul>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}

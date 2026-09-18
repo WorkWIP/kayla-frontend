@@ -1,10 +1,10 @@
 /**
- * Tests for `SidebarNav` (agents.md §10.3 task 7, §10.5 task 13).
+ * Tests for `SidebarNav` (agents.md §10.3 task 7, §10.5 task 13, §10.9 task 7).
  *
- * P5 is the second phase to touch this file: it adds the Knowledge Base destination alongside
- * Cohorts. These tests exist mainly to pin that both real destinations render with a working
- * link and the correct active state, so a future phase's own nav item cannot silently break
- * either of the two already shipped.
+ * P9 is the third phase to touch this file: it adds the Check-in Questions destination
+ * alongside Cohorts (P3) and Knowledge Base (P5). These tests exist mainly to pin that every
+ * real destination renders with a working link and the correct active state, so a future
+ * phase's own nav item cannot silently break one already shipped.
  */
 
 import { cleanup, render, screen } from "@testing-library/react";
@@ -42,13 +42,16 @@ afterEach(() => {
 const USER = { email: "hr@example.com", role: "hr_admin" as const };
 
 describe("SidebarNav", () => {
-  it("lists both real destinations with working links", () => {
+  it("lists every real destination with a working link", () => {
     render(<SidebarNav user={USER} />);
 
     expect(screen.getByRole("link", { name: "Cohorts" }).getAttribute("href")).toBe("/cohorts");
     expect(screen.getByRole("link", { name: "Knowledge Base" }).getAttribute("href")).toBe(
       "/knowledge-base",
     );
+    expect(
+      screen.getByRole("link", { name: "Check-in Questions" }).getAttribute("href"),
+    ).toBe("/check-in-questions");
   });
 
   it("marks Cohorts as the current page when the pathname is /cohorts", () => {
@@ -61,6 +64,9 @@ describe("SidebarNav", () => {
     expect(
       screen.getByRole("link", { name: "Knowledge Base" }).getAttribute("aria-current"),
     ).toBeNull();
+    expect(
+      screen.getByRole("link", { name: "Check-in Questions" }).getAttribute("aria-current"),
+    ).toBeNull();
   });
 
   it("marks Knowledge Base as the current page under its own sub-routes", () => {
@@ -69,6 +75,15 @@ describe("SidebarNav", () => {
 
     expect(
       screen.getByRole("link", { name: "Knowledge Base" }).getAttribute("aria-current"),
+    ).toBe("page");
+  });
+
+  it("marks Check-in Questions as the current page when the pathname is /check-in-questions", () => {
+    nav.pathname = "/check-in-questions";
+    render(<SidebarNav user={USER} />);
+
+    expect(
+      screen.getByRole("link", { name: "Check-in Questions" }).getAttribute("aria-current"),
     ).toBe("page");
   });
 

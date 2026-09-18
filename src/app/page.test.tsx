@@ -1,43 +1,23 @@
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+/**
+ * `/` exists only to send people to sign-in. Until recently it was the Phase 0 token-proof page,
+ * so app.kaylahealth.com opened on colour swatches — that page now lives at `/debug-tokens` and is
+ * covered by its own test.
+ *
+ * `redirect` throws a control-flow signal rather than returning, which is how Next unwinds a
+ * server component. The mock below records the call and rethrows nothing, so the assertion is on
+ * the argument rather than on any rendered output — there is none.
+ */
+const redirect = vi.hoisted(() => vi.fn());
+vi.mock("next/navigation", () => ({ redirect }));
 
 import Home from "./page";
 
-afterEach(() => {
-  cleanup();
-});
+describe("/", () => {
+  it("sends visitors to the sign-in page", () => {
+    Home();
 
-describe("P0 landing page", () => {
-  it("names the app in its only level-1 heading", () => {
-    render(<Home />);
-
-    const headings = screen.getAllByRole("heading", { level: 1 });
-
-    expect(headings).toHaveLength(1);
-    expect(headings[0]?.textContent).toBe("Kayla Health");
-  });
-
-  it("reports the environment the bundle was built for", () => {
-    render(<Home />);
-
-    const term = screen.getByText("Environment");
-    const value = term.parentElement?.querySelector("dd");
-
-    // Supplied by vitest.config.ts, the same way a build supplies it. If src/env.ts ever
-    // starts silently defaulting instead of throwing, this is where it shows up.
-    expect(value?.textContent).toBe("development");
-  });
-
-  it("paints every swatch from a token reference, never a literal colour", () => {
-    const { container } = render(<Home />);
-
-    const swatches = Array.from(container.querySelectorAll("[data-token]"));
-
-    expect(swatches.length).toBeGreaterThan(0);
-    for (const swatch of swatches) {
-      const token = swatch.getAttribute("data-token");
-      expect(token).toMatch(/^--/);
-      expect(swatch.getAttribute("style")).toBe(`background: var(${token});`);
-    }
+    expect(redirect).toHaveBeenCalledWith("/login");
   });
 });

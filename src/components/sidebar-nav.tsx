@@ -16,13 +16,23 @@
  * invented as new raw values — see the inline notes at each spot.
  *
  * --------------------------------------------------------------------------------------------
- * Scope for this phase (agents.md §10.3 / §10.5)
+ * Scope for this phase (agents.md §10.3 / §10.5 / §10.9)
  * --------------------------------------------------------------------------------------------
- * Two real destinations as of P5: Cohorts (P3) and Knowledge Base (P5). The reference
- * component's full item list (Overview/Engagement/Recognition/Reports/Privacy) is gated behind
- * phases P9–P12 that do not exist yet. A link to a route with no page 404s, which is worse than
- * the link being absent, so this file lists only what a shipped phase actually built. Add the
- * next item here in the phase that builds the page it points to, not before.
+ * Three real destinations as of P9: Cohorts (P3), Knowledge Base (P5) and Check-in Questions
+ * (P9 task 7). The reference component's full item list (Overview/Engagement/Recognition/
+ * Reports/Privacy) is gated behind phases that do not exist yet. A link to a route with no page
+ * 404s, which is worse than the link being absent, so this file lists only what a shipped phase
+ * actually built. Add the next item here in the phase that builds the page it points to, not
+ * before.
+ *
+ * "Check-in Questions" has no home in `kb/MVP-SPEC.md` §3.1's own sidebar map — that map
+ * predates this phase and never anticipated a dedicated question-registry screen; the closest
+ * existing item, Settings, is not built until P11 (agents.md §10.11 task 10) and does not name
+ * this surface even then. Rather than nest this under a Settings page that does not exist yet
+ * (guessing its eventual shape would be exactly the kind of on-spec widening agents.md R3 warns
+ * against), this ships as its own top-level item, matching how Cohorts and Knowledge Base were
+ * each introduced as their own item in the phase that built them. A future Settings page can
+ * absorb it as a section without changing this route.
  *
  * --------------------------------------------------------------------------------------------
  * Accessibility (agents.md §5.6 / R5.6 — the design system ships none of this)
@@ -59,7 +69,7 @@ export interface SidebarNavProps {
   readonly user: SidebarNavUser;
 }
 
-type NavIcon = "cohorts" | "knowledge-base";
+type NavIcon = "cohorts" | "knowledge-base" | "check-in-questions";
 
 interface NavItem {
   readonly key: string;
@@ -75,6 +85,12 @@ interface NavItem {
 const NAV_ITEMS: readonly NavItem[] = [
   { key: "cohorts", label: "Cohorts", href: "/cohorts", icon: "cohorts" },
   { key: "knowledge-base", label: "Knowledge Base", href: "/knowledge-base", icon: "knowledge-base" },
+  {
+    key: "check-in-questions",
+    label: "Check-in Questions",
+    href: "/check-in-questions",
+    icon: "check-in-questions",
+  },
 ];
 
 /** `AuthenticatedUser.role` (agents.md §6.1), spelled out for the org/role line under the brand. */
@@ -195,9 +211,39 @@ function DocumentGlyph() {
   );
 }
 
+/**
+ * Lucide's `list-checks` glyph — the same inline-path approach `UsersGlyph`/`DocumentGlyph`
+ * above already take (`Icon.jsx`'s own glyph map is not ported to this repo yet), used here for
+ * the Check-in Questions nav item (a checklist, not any single construct's own icon — this
+ * screen has no per-construct visuals, see `checkin-question-card.tsx`).
+ */
+function ChecklistGlyph() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width={20}
+      height={20}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className="shrink-0"
+    >
+      <path d="m3 17 2 2 4-4" />
+      <path d="m3 7 2 2 4-4" />
+      <path d="M13 6h8" />
+      <path d="M13 12h8" />
+      <path d="M13 18h8" />
+    </svg>
+  );
+}
+
 const NAV_ICON: Readonly<Record<NavIcon, () => ReactElement>> = {
   cohorts: UsersGlyph,
   "knowledge-base": DocumentGlyph,
+  "check-in-questions": ChecklistGlyph,
 };
 
 /** Lucide's `chevron-left` is a mirror of `chevron-right`, drawn here as a 180° rotation of the

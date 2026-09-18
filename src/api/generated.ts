@@ -244,6 +244,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/checkins/question-sets/active": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the calling org's active check-in question set
+         * @description The dashboard configuration surface's one read path (agents.md §10.9 task 7): this org's currently active question set and its questions, ordered for display, read from the real database rows a separate task in this same phase seeds. HR admin / org owner only.
+         */
+        get: operations["get_active_question_set_checkins_question_sets_active_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/checkins/responses": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record one check-in answer
+         * @description The one shared write path for every worker-facing check-in surface (agents.md §10.9 task 5): shift-end mood, a milestone construct or `other_concerns` answer, or the Day-Zero-to-Day-1 note. For `flow=milestone_checkin`, `question_key`/`milestone_day` are resolved against this org's currently active question set — an unknown pairing is a 404, not a silently-accepted write.
+         */
+        post: operations["record_checkin_response_checkins_responses_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/coaches": {
         parameters: {
             query?: never;
@@ -526,6 +566,43 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
+         * ActiveQuestionSetQuestion
+         * @description One row of the org's active `checkin_questions`, in the shape the dashboard configuration
+         *     surface (agents.md §10.9 task 7, `kayla-frontend`) renders — construct, milestone bindings,
+         *     display order — read from the real database row, never re-serialised from `kayla.checkin.
+         *     constructs` directly (see `kayla.checkin.router`'s own module docstring).
+         */
+        ActiveQuestionSetQuestion: {
+            /** Construct Id */
+            construct_id: string;
+            /** Display Order */
+            display_order: number;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Milestone Days */
+            milestone_days: number[];
+            question_type: components["schemas"]["CheckinQuestionType"];
+        };
+        /**
+         * ActiveQuestionSetResponse
+         * @description `GET /checkins/question-sets/active` — the calling org's one currently-active question set,
+         *     with its questions already ordered by `display_order`.
+         */
+        ActiveQuestionSetResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Questions */
+            questions: components["schemas"]["ActiveQuestionSetQuestion"][];
+            /** Version */
+            version: number;
+        };
+        /**
          * AuthenticatedUser
          * @description The caller's own account. Carries no tenant identifier — see the module docstring.
          *
@@ -619,6 +696,106 @@ export interface components {
              * @example es
              */
             locale: string;
+        };
+        /**
+         * CheckinFlow
+         * @description Which worker-facing surface produced this response — the persona/flow discriminator agents.md
+         *     §10.9 task 4 asks for. P10 (agents.md §10.10, a later phase) is what actually populates
+         *     `SHIFT_END`/`DAY_ZERO` rows; this phase only needs the column to exist and be a genuinely
+         *     closed vocabulary, never a free-text guess a caller could misspell.
+         * @enum {string}
+         */
+        CheckinFlow: "milestone_checkin" | "shift_end" | "day_zero";
+        /**
+         * CheckinQuestionType
+         * @description The registry's own, narrower vocabulary for `checkin_questions.question_type` — `SCALE` or
+         *     `FREE_TEXT` only, never `MOOD`. `MOOD` is a `CheckinResponseKind` reserved for the shift-end/
+         *     day-zero flows, which have no row in this registry at all (see the module docstring's
+         *     `checkin_responses` section) — a configurable milestone question is always either a scored
+         *     construct or a free-text prompt, matching `kb/kaylahealth-demo/lib/mock/checkinContent.ts`'s
+         *     own `milestoneQuestions` shape (`kind: "mood" | "text"` there, mapped to this backend's
+         *     `SCALE`/`FREE_TEXT` because a milestone tap is stored as the 0-100 value it represents, not the
+         *     tap itself — see `CheckinResponseKind.SCALE`'s own docstring).
+         * @enum {string}
+         */
+        CheckinQuestionType: "scale" | "free_text";
+        /**
+         * CheckinResponseAck
+         * @description What `POST /checkins/responses` hands back: enough for a delivery screen to confirm the
+         *     write landed, and nothing a free-text answer's own author did not already know. See the module
+         *     docstring's dedicated section for why `text_value` is never included.
+         */
+        CheckinResponseAck: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            flow: components["schemas"]["CheckinFlow"];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Milestone Day */
+            milestone_day: number | null;
+            /** Numeric Value */
+            numeric_value: number | null;
+            /** Question Key */
+            question_key: string;
+            /**
+             * Question Set Version
+             * @description The `CheckinQuestionSet.version` that was active when this response was recorded — `null` for `shift_end`/`day_zero`, which are not drawn from the versioned registry.
+             */
+            question_set_version: number | null;
+            response_kind: components["schemas"]["CheckinResponseKind"];
+        };
+        /**
+         * CheckinResponseKind
+         * @description What shape this row's answer is — mirrors `kayla.chat.models.ChatMessageRole`'s own closed,
+         *     structurally-enforced vocabulary, not `ChatMessageStatus`'s "real enum, but not CHECK-tied to
+         *     another column" shape (that distinction belongs to `numeric_value`'s relationship to this
+         *     column, not to this column's own values — see the module docstring).
+         * @enum {string}
+         */
+        CheckinResponseKind: "scale" | "mood" | "free_text";
+        /**
+         * CheckinResponseRequest
+         * @description `POST /checkins/responses` — the one request shape every worker-facing check-in surface
+         *     sends through (agents.md §10.9 task 5): shift-end mood, a milestone construct or
+         *     `other_concerns` answer, or the Day-Zero-to-Day-1 note, once P10 builds the screens that call
+         *     this endpoint. See the module docstring for why validation of the (`flow`, `question_key`,
+         *     `milestone_day`) combination is deliberately left to `kayla.checkin.service.CheckinService.
+         *     record_response`, not expressed here.
+         */
+        CheckinResponseRequest: {
+            /** @description Which worker-facing surface produced this answer — `kayla.checkin.models.CheckinFlow`. */
+            flow: components["schemas"]["CheckinFlow"];
+            /**
+             * Milestone Day
+             * @description Required, and must be one of `kayla.checkin.constructs.MILESTONE_DAYS`, when `flow=milestone_checkin`. Must be omitted (`null`) for `shift_end`/`day_zero` — neither flow is drawn from the versioned milestone registry.
+             */
+            milestone_day?: number | null;
+            /**
+             * Numeric Value
+             * @description Required for `response_kind` in (`scale`, `mood`); must be omitted for `free_text`. A `scale` value is 0-100.
+             */
+            numeric_value?: number | null;
+            /**
+             * Question Key
+             * @description For `flow=milestone_checkin`, one of `kayla.checkin.constructs.ALL_CHECKIN_QUESTION_IDS` (validated against the org's active question set by the service, not by this schema). Otherwise, P10's own shift-end/day-zero question vocabulary.
+             * @example role_clarity
+             * @example other_concerns
+             * @example shift_end_mood
+             */
+            question_key: string;
+            /** @description What shape `numeric_value`/`text_value` below is meant to be read as. */
+            response_kind: components["schemas"]["CheckinResponseKind"];
+            /**
+             * Text Value
+             * @description Required, non-blank, for `response_kind=free_text`; must be omitted otherwise. Never stored anywhere `dashboard_ro` — or any future aggregation view over `checkin_responses` — can read (agents.md §10.9 task 6, §6.2).
+             */
+            text_value?: string | null;
         };
         /**
          * CoachSummary
@@ -2257,6 +2434,104 @@ export interface operations {
                 };
             };
             /** @description `locale` is not one of the supported values ('en', 'es'), or `content` fails length validation. There is no fallback to English. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_active_question_set_checkins_question_sets_active_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActiveQuestionSetResponse"];
+                };
+            };
+            /** @description The credential is missing, expired, revoked or not ours. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Signed in, but not as an HR admin or org owner. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description This organisation has no active check-in question set configured. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    record_checkin_response_checkins_responses_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CheckinResponseRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckinResponseAck"];
+                };
+            };
+            /** @description The credential is missing, expired, revoked or not ours. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description This org has no active question set, or the (question_key, milestone_day) pair named does not exist in it. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The response_kind/numeric_value/text_value combination is invalid, or a milestone question's registered type disagrees with response_kind. */
             422: {
                 headers: {
                     [name: string]: unknown;
