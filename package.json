@@ -1,0 +1,37 @@
+{
+  "name": "kayla-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "codegen": "openapi-typescript ../kayla-backend/openapi.json --output src/api/generated.ts",
+    "start": "next start",
+    "lint": "eslint",
+    "lint:tokens": "oxlint -c .oxlintrc.json src && npm run --silent lint:tokens:values",
+    "lint:tokens:values": "node -e \"const fs=require('fs'),path=require('path');const c=JSON.parse(fs.readFileSync('.oxlintrc.json','utf8')).settings.kaylaTokenAdherence;const ignore=new Set(c.ignore),exts=new Set(c.extensions),rules=c.rules.map(r=>[new RegExp(r.pattern,r.flags),r]);let n=0;const walk=d=>{for(const e of fs.readdirSync(d,{withFileTypes:true}).sort((a,b)=>a.name<b.name?-1:1)){const f=d+'/'+e.name;if(ignore.has(f))continue;if(e.isDirectory()){walk(f);continue}if(!exts.has(path.extname(f)))continue;fs.readFileSync(f,'utf8').split(/\\r?\\n/).forEach((line,i)=>{for(const [re,r] of rules){const m=re.exec(line);if(m){n++;console.error(f+':'+(i+1)+':'+(m.index+1)+': '+r.severity+': '+r.message+' ['+r.id+']')}}})}};walk('src');if(n>0){console.error(n+' token-adherence error(s). agents.md R5: never hardcode a design value.');process.exit(1)}\"",
+    "typecheck": "tsc --noEmit",
+    "test": "NODE_OPTIONS=--no-experimental-webstorage vitest run"
+  },
+  "dependencies": {
+    "next": "16.3.5",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@testing-library/react": "^16.3.3",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^4.7.0",
+    "eslint": "^9",
+    "eslint-config-next": "16.3.5",
+    "jsdom": "^29.0.0",
+    "openapi-typescript": "7.13.0",
+    "oxlint": "^1.83.0",
+    "tailwindcss": "^4",
+    "typescript": "^5",
+    "vitest": "^3.2.7"
+  }
+}

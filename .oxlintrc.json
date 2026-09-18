@@ -1,0 +1,79 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": [
+    "react"
+  ],
+  "categories": {
+    "correctness": "error"
+  },
+  "rules": {},
+  "ignorePatterns": [
+    "src/styles/tokens.css"
+  ],
+  "settings": {
+    "kaylaTokenAdherence": {
+      "source": "kb/design_system/_adherence.oxlintrc.json",
+      "enforcedBy": "npm run lint:tokens (see package.json). Every rule here is an error, not a warning.",
+      "whyNotUnderRules": [
+        "oxlint 1.83.0 does not implement `no-restricted-syntax` — it rejects the config outright with",
+        "\"Rule 'no-restricted-syntax' not found in plugin 'eslint'\". The rule set it does ship is",
+        "no-restricted-imports / -globals / -exports / -properties, none of which can match a literal's",
+        "value. So the three hard-coded-value rules live here as data and are enforced by the scanner half",
+        "of `npm run lint:tokens`, which uses these exact patterns and messages.",
+        "When oxlint ships no-restricted-syntax, move these three into `rules` as",
+        "[\"error\", {selector, message}, ...] and drop the scanner. Nothing else has to change."
+      ],
+      "droppedFromSource": [
+        "no-restricted-imports — it forbids reaching past a design_system/index.js barrel that does not",
+        "exist in this repo. kayla-frontend consumes the design system as GENERATED TOKENS",
+        "(src/styles/tokens.css), not as a JavaScript package, so the rule could never fire and would",
+        "read as protection we do not have.",
+        "react/forbid-elements — shipped with an empty `forbid` list; a rule that forbids nothing.",
+        "The ~100 component prop-contract selectors — they name design-system components (Button, Icon,",
+        "EmployeeCard, ...) that this repo does not yet contain. They belong in the phase that ports them,",
+        "where they can be error-level against real usage."
+      ],
+      "extensions": [
+        ".ts",
+        ".tsx",
+        ".css"
+      ],
+      "ignore": [
+        "src/styles/tokens.css"
+      ],
+      "rules": [
+        {
+          "id": "raw-hex",
+          "severity": "error",
+          "pattern": "#[0-9a-fA-F]{3,8}\\b",
+          "flags": "",
+          "message": "Raw hex color — use a design-system color token via var()."
+        },
+        {
+          "id": "raw-px",
+          "severity": "error",
+          "pattern": "\\b\\d+px\\b",
+          "flags": "",
+          "message": "Raw px value — use a design-system spacing token via var()."
+        },
+        {
+          "id": "non-ds-font-family",
+          "severity": "error",
+          "pattern": "font-family\\s*:\\s*(?!\\s*['\"]?(?:Plus Jakarta Sans|Manrope|Inter|var\\(--font-))",
+          "flags": "i",
+          "message": "Font not provided by the design system. Available: Plus Jakarta Sans, Manrope, Inter — or a --font-* token via var()."
+        }
+      ],
+      "adaptedFromSource": [
+        "non-ds-font-family differs from the upstream selector in two ways, both load-bearing:",
+        "1. It allows `var(--font-...)`. Upstream only allowed the three family names spelled out, which would",
+        "   have failed the one correct way to set a family here: `font-family: var(--font-core)` (R5 — the",
+        "   token, not the literal).",
+        "2. The negative lookahead now starts with \\s*. Upstream reads `\\s*(?!['\\\"]?(?:Plus Jakarta Sans|...))`,",
+        "   and because \\s* backtracks to zero width the lookahead is evaluated ON the space after the colon —",
+        "   so `font-family: Inter` matches the rule that is supposed to permit Inter. Upstream flags every",
+        "   declaration written with a space after the colon, including the compliant ones."
+      ]
+    }
+  }
+}
