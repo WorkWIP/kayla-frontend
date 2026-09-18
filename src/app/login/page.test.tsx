@@ -169,6 +169,52 @@ describe("login screen — the organisation comes from the invitation link", () 
     expect(notice.closest("section")?.textContent).toContain("sign-in link");
   });
 
+  it("recovers from a lost link when the whole url is pasted in", async () => {
+    nav.searchParams = new URLSearchParams();
+
+    render(<LoginPage />);
+    expect(screen.queryByLabelText("Work email")).toBeNull();
+
+    fireEvent.change(screen.getByLabelText("Or paste your sign-in link"), {
+      // Deliberately messy: a real paste carries the scheme, the path and often a trailing
+      // fragment, and the id must still be found inside it.
+      target: { value: `https://app.kaylahealth.com/login?org=${ORG_ID}#inbox` },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+    // The sign-in form is what appears — the point is that this is no longer a dead end.
+    expect(await screen.findByLabelText("Work email")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeTruthy();
+  });
+
+  it("accepts the bare organisation id too", async () => {
+    nav.searchParams = new URLSearchParams();
+
+    render(<LoginPage />);
+
+    fireEvent.change(screen.getByLabelText("Or paste your sign-in link"), {
+      target: { value: `  ${ORG_ID.toUpperCase()}  ` },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+    expect(await screen.findByLabelText("Work email")).toBeTruthy();
+  });
+
+  it("says so when the pasted text carries no organisation id", () => {
+    nav.searchParams = new URLSearchParams();
+
+    render(<LoginPage />);
+
+    fireEvent.change(screen.getByLabelText("Or paste your sign-in link"), {
+      target: { value: "https://app.kaylahealth.com/login" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+    expect(screen.getByText(/does not contain an organisation id/i)).toBeTruthy();
+    // Still no form: a wrong paste must not look like it worked.
+    expect(screen.queryByLabelText("Work email")).toBeNull();
+  });
+
   it("ignores a query parameter that is not a uuid", () => {
     nav.searchParams = new URLSearchParams("org=not-a-uuid");
 

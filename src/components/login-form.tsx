@@ -101,6 +101,10 @@ const COPY = {
   emailMalformed: "That does not look like an email address.",
   passwordRequired: "Enter your password.",
   failureLead: "Sign-in failed.",
+  orgLabel: "Or paste your sign-in link",
+  orgPlaceholder: "https://app.kaylahealth.com/login?org=…",
+  orgSubmit: "Continue",
+  orgNotFound: "That does not contain an organisation id. Paste the whole sign-in link.",
   /**
    * One line for every cause the server refuses to distinguish. Changing this to anything that
    * varies by cause reintroduces the account-existence oracle `RAG.md` §12.3 closes.
@@ -135,6 +139,19 @@ function messageFor(failure: unknown): string {
     return FAILURE_COPY[failure.code] ?? COPY.unexpected;
   }
   return COPY.unexpected;
+}
+
+/**
+ * Pulls an organisation id out of whatever was pasted: the whole sign-in URL, a `?org=` fragment,
+ * or the bare id. Deliberately a scan for the UUID shape rather than URL parsing — people paste
+ * links with tracking suffixes, wrapped across two lines by a mail client, or with the scheme
+ * missing, and all of those still contain exactly the thing we need.
+ */
+function extractOrgId(pasted: string): string | null {
+  const match = pasted
+    .trim()
+    .match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+  return match ? match[0].toLowerCase() : null;
 }
 
 /**
@@ -204,8 +221,10 @@ export function LoginForm() {
 
   // Resolved once per mount. Holding it in state rather than recomputing keeps the form stable if
   // the query string changes underneath a half-typed sign-in.
-  const [orgId] = useState(() => readOrgId(searchParams.get(ORG_QUERY_PARAM)));
+  const [orgId, setOrgId] = useState(() => readOrgId(searchParams.get(ORG_QUERY_PARAM)));
 
+  const [pastedOrg, setPastedOrg] = useState("");
+  const [pastedOrgError, setPastedOrgError] = useState<string | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
@@ -222,6 +241,8 @@ export function LoginForm() {
   const emailErrorId = `${emailId}-error`;
   const passwordErrorId = `${passwordId}-error`;
   const noticeId = `${formId}-notice`;
+  const pastedOrgId = `${formId}-org`;
+  const pastedOrgErrorId = `${pastedOrgId}-error`;
 
   // Carry the organisation forward, so the next visit to /login works without the invitation link.
   useEffect(() => {
@@ -275,12 +296,20 @@ export function LoginForm() {
     }
   }
 
-  // No organisation, no form. A sign-in that cannot succeed is worse than an explanation, and
-  // there is no field to offer instead: the organisation is not something a person types.
+  // No organisation, no sign-in form — a form that cannot succeed is worse than an explanation.
+  //
+  // The invitation link remains the intended route, and the organisation is still not something
+  // anyone should have to type. But "open the link again" is not a recovery path when the link is
+  // the thing you have lost: it left an administrator with no way in at all. So the notice now
+  // carries a fallback that accepts the whole link pasted in, or the bare id out of it.
+  //
+  // This gives nothing away. The id is not a credential (see `remember`): it selects a tenant,
+  // every wrong value matches fewer rows rather than more, and a correct one without an address
+  // and password opens nothing. Guessing one means guessing a v4 UUID.
   if (orgId === null) {
-    // Not `role="alert"`: this is here on first paint, and a live region only announces what
-    // *changes*. A labelled section with a real heading is what a screen reader actually reads.
     return (
+      // Not `role="alert"`: this is here on first paint, and a live region only announces what
+      // *changes*. A labelled section with a real heading is what a screen reader actually reads.
       <section
         aria-labelledby={noticeId}
         className="flex flex-col gap-12 rounded-card bg-surface-plum-tint p-24 inset-shadow-plum-tint"
@@ -292,6 +321,48 @@ export function LoginForm() {
           Open the sign-in link Kayla emailed you — it carries your organisation with it. Your
           administrator can send it again.
         </p>
+
+        <form
+          noValidate
+          onSubmit={(event) => {
+            event.preventDefault();
+            const found = extractOrgId(pastedOrg);
+            if (found === null) {
+              setPastedOrgError(COPY.orgNotFound);
+              return;
+            }
+            setPastedOrgError(null);
+            remember(found);
+            setOrgId(found);
+          }}
+          className="flex flex-col gap-8"
+        >
+          <label htmlFor={pastedOrgId} className="text-field-label font-bold text-text-primary">
+            {COPY.orgLabel}
+          </label>
+          <input
+            id={pastedOrgId}
+            name="organisation"
+            type="text"
+            value={pastedOrg}
+            onChange={(event) => setPastedOrg(event.target.value)}
+            aria-invalid={pastedOrgError !== null}
+            aria-describedby={pastedOrgError !== null ? pastedOrgErrorId : undefined}
+            placeholder={COPY.orgPlaceholder}
+            className="min-h-48 w-full rounded-control bg-surface-card px-16 text-body text-text-primary inset-shadow-field focus-visible:outline-hidden focus-visible:inset-shadow-focus-mint"
+          />
+          {pastedOrgError !== null ? (
+            <p id={pastedOrgErrorId} className="text-label text-text-critical">
+              {pastedOrgError}
+            </p>
+          ) : null}
+          <button
+            type="submit"
+            className="min-h-48 w-full rounded-control bg-action-primary px-24 text-label font-bold text-text-inverse transition-colors duration-[var(--duration-fast)] ease-standard hover:bg-action-primary-hover focus-visible:outline-hidden focus-visible:inset-shadow-focus-mint"
+          >
+            {COPY.orgSubmit}
+          </button>
+        </form>
       </section>
     );
   }
