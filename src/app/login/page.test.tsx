@@ -153,84 +153,68 @@ describe("login screen — structure and accessible names", () => {
   });
 });
 
-describe("login screen — the organisation comes from the invitation link", () => {
-  it("explains itself instead of rendering a form it cannot submit", () => {
+describe("login screen — the organisation is resolved server-side", () => {
+  it("renders a plain sign-in form with no invitation link at all", () => {
     nav.searchParams = new URLSearchParams();
 
     render(<LoginPage />);
 
-    expect(screen.queryByLabelText("Work email")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
-
-    // A heading, not a live region: this is on screen at first paint, and a live region only
-    // announces what changes.
-    const notice = screen.getByRole("heading", { level: 2 });
-    expect(notice.textContent).toContain("which organisation");
-    expect(notice.closest("section")?.textContent).toContain("sign-in link");
-  });
-
-  it("recovers from a lost link when the whole url is pasted in", async () => {
-    nav.searchParams = new URLSearchParams();
-
-    render(<LoginPage />);
-    expect(screen.queryByLabelText("Work email")).toBeNull();
-
-    fireEvent.change(screen.getByLabelText("Or paste your sign-in link"), {
-      // Deliberately messy: a real paste carries the scheme, the path and often a trailing
-      // fragment, and the id must still be found inside it.
-      target: { value: `https://app.kaylahealth.com/login?org=${ORG_ID}#inbox` },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
-
-    // The sign-in form is what appears — the point is that this is no longer a dead end.
-    expect(await screen.findByLabelText("Work email")).toBeTruthy();
+    expect(screen.getByLabelText("Work email")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Sign in" })).toBeTruthy();
   });
 
-  it("accepts the bare organisation id too", async () => {
+  it("sends no org_id when the visit carries no invitation link", async () => {
     nav.searchParams = new URLSearchParams();
-
+    fetchMock.mockResolvedValue(jsonResponse(200, session("hr_admin")));
     render(<LoginPage />);
 
-    fireEvent.change(screen.getByLabelText("Or paste your sign-in link"), {
-      target: { value: `  ${ORG_ID.toUpperCase()}  ` },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    signIn();
 
-    expect(await screen.findByLabelText("Work email")).toBeTruthy();
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    expect(body).not.toHaveProperty("org_id");
+    expect(body).toEqual({ email: "hr@example.com", password: "correct horse battery staple" });
   });
 
-  it("says so when the pasted text carries no organisation id", () => {
-    nav.searchParams = new URLSearchParams();
-
-    render(<LoginPage />);
-
-    fireEvent.change(screen.getByLabelText("Or paste your sign-in link"), {
-      target: { value: "https://app.kaylahealth.com/login" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
-
-    expect(screen.getByText(/does not contain an organisation id/i)).toBeTruthy();
-    // Still no form: a wrong paste must not look like it worked.
-    expect(screen.queryByLabelText("Work email")).toBeNull();
-  });
-
-  it("ignores a query parameter that is not a uuid", () => {
+  it("ignores a query parameter that is not a uuid, and still renders a working form", () => {
     nav.searchParams = new URLSearchParams("org=not-a-uuid");
 
     render(<LoginPage />);
 
-    expect(screen.queryByLabelText("Work email")).toBeNull();
+    expect(screen.getByLabelText("Work email")).toBeTruthy();
   });
 
-  it("remembers the organisation so a later visit without the link still works", () => {
+  it("does not carry an organisation from one visit into the next — found live: a stale value from a first organisation broke sign-in to a second one from the same browser", async () => {
+    // A first visit resolves an id from the link and signs in successfully.
+    fetchMock.mockResolvedValue(jsonResponse(200, session("hr_admin")));
     render(<LoginPage />);
+    signIn();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     cleanup();
 
+    // A later, ordinary visit with no link of its own must not resend the first visit's id.
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValue(jsonResponse(200, session("hr_admin")));
     nav.searchParams = new URLSearchParams();
     render(<LoginPage />);
+    signIn();
 
-    expect(screen.getByLabelText("Work email")).toBeDefined();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).not.toHaveProperty("org_id");
+  });
+});
+
+describe("login screen — recovering a forgotten password", () => {
+  it("links to /forgot-password", () => {
+    render(<LoginPage />);
+
+    expect(screen.getByRole("link", { name: "Forgot your password?" }).getAttribute("href")).toBe(
+      "/forgot-password",
+    );
   });
 });
 
