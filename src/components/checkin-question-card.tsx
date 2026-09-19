@@ -19,9 +19,12 @@
  * exceptions, and neither violates the rule: `CheckinQuestionType` is a fixed two-member enum
  * (`scale` / `free_text`) that describes response *shape*, not business meaning, so labelling its
  * two members is the same kind of enum-to-copy mapping `kb-document-card.tsx`'s own
- * `STATUS_TONE`/`TONE_CLASS` already do for `KbDocumentStatus`; milestone days are rendered
+ * `STATUS_TONE` and `@/components/ui/badge` already do for `KbDocumentStatus`; milestone days are rendered
  * verbatim as `Day ${n}`, a formatter over whatever numbers arrive, never a hardcoded day list.
  */
+
+import { Badge } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
 
 export type CheckinQuestionType = "scale" | "free_text";
 
@@ -62,19 +65,11 @@ const QUESTION_TYPE_LABEL: Readonly<Record<CheckinQuestionType, string>> = {
  * screen needs — a question type is a fact, not a status, so it never earns the positive/
  * attention/critical tones that file reserves for those. */
 function QuestionTypeBadge({ questionType }: { readonly questionType: CheckinQuestionType }) {
-  return (
-    <span className="inline-flex w-fit items-center rounded-pill bg-surface-warm-gray px-12 py-4 text-meta font-bold text-text-secondary">
-      {QUESTION_TYPE_LABEL[questionType]}
-    </span>
-  );
+  return <Badge>{QUESTION_TYPE_LABEL[questionType]}</Badge>;
 }
 
 function MilestoneChip({ day }: { readonly day: number }) {
-  return (
-    <span className="inline-flex w-fit items-center rounded-pill border border-hairline-lilac px-12 py-4 text-meta font-medium text-text-secondary">
-      {`Day ${day}`}
-    </span>
-  );
+  return <Badge variant="outline">{`Day ${day}`}</Badge>;
 }
 
 export interface CheckinQuestionCardProps {
@@ -90,14 +85,14 @@ export function CheckinQuestionCard({ question, position }: CheckinQuestionCardP
     question.milestone_days.length === 0 ? "No milestones configured" : null;
 
   return (
-    <li className="flex flex-col gap-12 rounded-card border border-hairline-lilac bg-surface-card p-24 shadow-elevation-card sm:flex-row sm:items-start sm:gap-16">
+    <Card as="li" className="flex flex-col gap-12 sm:flex-row sm:items-start sm:gap-16">
       <span
         aria-hidden="true"
         className="flex size-32 shrink-0 items-center justify-center rounded-full bg-surface-warm-gray text-meta font-bold text-text-secondary"
       >
         {position}
       </span>
-      <div className="flex min-w-0 flex-1 flex-col gap-8">
+      <div className="flex min-w-[0] flex-1 flex-col gap-8">
         <div className="flex flex-col gap-4">
           <p className="text-card-title font-extrabold text-text-primary">{label}</p>
           {/* The raw wire value, for an admin who needs the exact id (support, a bug report) —
@@ -114,7 +109,7 @@ export function CheckinQuestionCard({ question, position }: CheckinQuestionCardP
           ) : null}
         </div>
       </div>
-    </li>
+    </Card>
   );
 }
 

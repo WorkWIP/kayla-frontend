@@ -17,7 +17,11 @@
  *    `ApiError`, so a caller has exactly one failure type to handle and `fetch`'s raw `TypeError`
  *    never escapes this module.
  *
- * 3. **The access token lives in memory and nowhere else.** See `SESSION` below.
+ * 3. **The access token lives in memory and nowhere else, and the refresh token never enters this
+ *    bundle at all.** See `SESSION` and `ActiveSession` below: the dashboard's durable credential
+ *    lives in an `HttpOnly` cookie that only `POST /auth/session` can be presented with, and that
+ *    endpoint answers with a 15-minute access token and nothing else. Every other request is
+ *    `credentials: "omit"` and carries its authority on the `Authorization` header.
  */
 
 import { env } from "@/env";
@@ -30,8 +34,32 @@ type ErrorEnvelope = components["schemas"]["ErrorEnvelope"];
 /** What `POST /auth/login` and `POST /auth/refresh` both return. */
 export type Session = components["schemas"]["SessionResponse"];
 
+/** What `POST /auth/session` returns: an access token and its owner, and **no refresh token**. */
+export type RestoredSession = components["schemas"]["RestoredSession"];
+
 /** The caller's own account, as the API describes it. */
 export type AuthenticatedUser = components["schemas"]["AuthenticatedUser"];
+
+/**
+ * What this app actually holds once signed in — deliberately **less** than `Session`.
+ *
+ * `SessionResponse.tokens` is a `TokenPair`, and a `TokenPair` carries a seven-day refresh token.
+ * The dashboard has never had a use for one (it does not call `POST /auth/refresh`), and now that
+ * the backend keeps the browser's copy in an `HttpOnly` cookie this app must not retain a second,
+ * script-readable copy of it: an XSS that could read `getSession().tokens.refresh_token` would walk
+ * away with exactly the durable credential the cookie design exists to deny it. So `setSession`
+ * takes the whole wire shape and keeps only these fields; the refresh token is dropped on the floor
+ * the moment it arrives.
+ *
+ * Shaped as `{tokens: {...}, user}` rather than flattened so that every existing
+ * `session.tokens.access_token` call site reads the same as it always did. That is not laziness:
+ * the fewer places this change touches, the smaller the chance one of them was the place that
+ * mattered.
+ */
+export interface ActiveSession {
+  readonly tokens: Omit<Session["tokens"], "refresh_token" | "refresh_expires_at">;
+  readonly user: AuthenticatedUser;
+}
 
 /** The six roles of agents.md §6.1, as a type rather than six string literals at call sites. */
 export type UserRole = components["schemas"]["UserRole"];
@@ -90,36 +118,113 @@ export class ApiError extends Error {
 /**
  * The signed-in session, held in a module-scoped variable and **nowhere else**.
  *
- * **Never `localStorage`, never `sessionStorage`, never a cookie.** This dashboard is the surface
- * that reads aggregate HR data for a whole organisation, so a single XSS on any page of it would
- * turn a token in web storage into a silent bulk export of that data — web storage is readable by
- * any script running on the origin, and it survives the tab that was compromised. A variable in
- * this module is reachable only by code in this bundle and dies with the tab, which turns
- * "steal the token" into "keep a foothold in a live page".
+ * **Never `localStorage`, never `sessionStorage`, never a cookie this code can read.** This
+ * dashboard is the surface that reads aggregate HR data for a whole organisation, so a single XSS
+ * on any page of it would turn a token in web storage into a silent bulk export of that data — web
+ * storage is readable by any script running on the origin, and it survives the tab that was
+ * compromised. A variable in this module is reachable only by code in this bundle and dies with the
+ * tab, which turns "steal the token" into "keep a foothold in a live page". That reasoning is
+ * unchanged and is why the **access** token still lives here and only here.
  *
- * A cookie would be worse still, not better: the browser would attach it to every request on its
- * own, which is precisely the ambient authority CSRF exploits. The backend sets no cookie for the
- * same reason (`kayla.auth.schemas` module docstring) and expects `Authorization: Bearer`.
+ * ---------------------------------------------------------------------------------------------
+ * What changed, and why the old conclusion was too strong
+ * ---------------------------------------------------------------------------------------------
+ * This comment used to end: *a cookie would be worse still, the backend sets none, and a full page
+ * reload therefore signs the user out.* The middle clause is now false and the first was too broad,
+ * so here is the corrected version rather than a quiet deletion.
  *
- * The cost is honest and accepted: a full page reload signs the user out, because the refresh
- * token has no safe browser home either. The worker app is different — `RAG.md` §12.3 puts its
- * refresh token in the OS Keychain/Keystore, which a browser does not have.
+ * The cost of "in memory only" was not small. An HR admin who reloaded — or followed a link out and
+ * came back, or was reloaded by a deploy — was signed out mid-task, every time, because a browser
+ * has no keychain to keep a refresh token in.
+ *
+ * The fix that was *rejected*: put the refresh token in an `HttpOnly` cookie and call
+ * `POST /auth/refresh` on boot. `HttpOnly` stops a script **reading** a cookie; it does not stop a
+ * script **spending** one. An XSS could call `fetch("/auth/refresh", {credentials: "include"})` and
+ * read the seven-day, self-rotating refresh token out of the response body, where `TokenPair` makes
+ * it a required field — turning today's worst case (a 15-minute token that dies with the tab) into
+ * durable offline access. Strictly worse.
+ *
+ * What was built instead: the backend sets one cookie, scoped by `Path` to the single endpoint
+ * `POST /auth/session`, which answers with an access token and **no refresh token** at all
+ * (`RestoredSession` has nowhere to put one). So:
+ *
+ * - This module still never sees, stores or sends the refresh token. `setSession` drops it.
+ * - Exactly three calls in this app opt into sending the cookie, one at a time and by name — see
+ *   `sendSessionCookie` below. Every other request is `credentials: "omit"`, so no ambient
+ *   authority reaches any data endpoint.
+ * - An XSS's ceiling is unchanged: it can mint 15-minute tokens while the page it compromised is
+ *   alive, exactly as it can today, and can exfiltrate nothing that outlives the tab.
+ *
+ * The worker app is still different, and deliberately so — `RAG.md` §12.3 puts its refresh token in
+ * the OS Keychain/Keystore, and the backend refuses to set this cookie for a worker-audience
+ * session precisely so React Native's cookie jar never becomes a second, worse home for one.
  */
-let SESSION: Session | null = null;
+let SESSION: ActiveSession | null = null;
 
-/** Adopt a session returned by `/auth/login` or `/auth/refresh`. Memory only — see `SESSION`. */
+/**
+ * Adopt a session returned by `/auth/login`, `/auth/signup/set-password` or
+ * `/orgs/signup/complete`. Memory only, and **minus the refresh token** — see `ActiveSession`.
+ */
 export function setSession(session: Session): void {
-  SESSION = session;
+  SESSION = {
+    // Field by field rather than a spread, so that a refresh token cannot be re-admitted by a
+    // future backend field this code never looked at.
+    tokens: {
+      access_token: session.tokens.access_token,
+      token_type: session.tokens.token_type,
+      expires_in: session.tokens.expires_in,
+      expires_at: session.tokens.expires_at,
+    },
+    user: session.user,
+  };
 }
 
 /** The current session, or null when signed out. */
-export function getSession(): Session | null {
+export function getSession(): ActiveSession | null {
   return SESSION;
 }
 
 /** Forget the session. Called on sign-out, and whenever a credential must not be kept. */
 export function clearSession(): void {
   SESSION = null;
+}
+
+/**
+ * Ask the backend to restore a session from its `HttpOnly` cookie, and adopt it.
+ *
+ * The one call in this app that boots a session without a password. It resolves to the restored
+ * session on success and to `null` when there is nothing to restore — a first visit, a cleared
+ * cookie jar, an expired or already-spent cookie — because "not signed in" is an ordinary outcome
+ * of asking, not a failure worth throwing over. Anything that is *not* an authentication answer
+ * (the API is unreachable, a proxy returned HTML) also resolves to `null`: the caller's only
+ * sensible response to either is to show the sign-in page.
+ *
+ * This is the only call that sends the cookie in order to *obtain* a credential, and the response
+ * it adopts carries no refresh token, so nothing durable enters this bundle's memory.
+ */
+export async function restoreSession(options: RequestOptions = {}): Promise<ActiveSession | null> {
+  // Deliberately not sent with the current access token even if one exists: this call is about the
+  // cookie, and `apiRequest` attaching a bearer header would make an expired token look like the
+  // reason a restore failed.
+  try {
+    const restored = await apiRequest("post", "/auth/session", {
+      ...options,
+      sendSessionCookie: true,
+    });
+    SESSION = {
+      tokens: {
+        access_token: restored.access_token,
+        token_type: restored.token_type,
+        expires_in: restored.expires_in,
+        expires_at: restored.expires_at,
+      },
+      user: restored.user,
+    };
+    return SESSION;
+  } catch {
+    clearSession();
+    return null;
+  }
 }
 
 /* -------------------------------------------------------------------------------------------
@@ -160,6 +265,29 @@ const API_ROOT = env.NEXT_PUBLIC_API_BASE_URL.replace(/\/+$/, "");
 interface RequestOptions {
   /** Aborts the request. Composed with the built-in timeout. */
   readonly signal?: AbortSignal;
+  /**
+   * Send and accept the backend's `HttpOnly` session cookie on **this call only**.
+   *
+   * Defaults to `false`, and the default is the security property: `credentials: "omit"` means the
+   * browser neither attaches a cookie nor stores a `Set-Cookie`, so no request this app makes
+   * carries ambient authority and every authenticated call is authorised by the `Authorization`
+   * header alone. An `apiRequest` that opted everything in would hand a durable credential to
+   * `GET /dashboard/overview` and to every other data endpoint, which is exactly the CSRF surface
+   * `SameSite=Strict` and the cookie's narrow `Path` are there to close.
+   *
+   * Exactly three calls set it, and each one needs it for a different half of the same cookie:
+   *
+   * - `POST /auth/login` and `POST /orgs/signup/complete` — to **receive** it. `credentials:
+   *   "omit"` makes the browser ignore `Set-Cookie` outright, so without this the cookie would be
+   *   set by the server and silently discarded by the client, and reload-restore would fail with
+   *   nothing anywhere saying why.
+   * - `POST /auth/session` — to **present** it. This is the only endpoint the cookie's `Path`
+   *   allows it to be attached to at all.
+   * - `POST /auth/logout` — to accept the expiry that clears it.
+   *
+   * Do not add a fourth without reading `kayla.auth.cookies`' module docstring first.
+   */
+  readonly sendSessionCookie?: boolean;
 }
 
 function isErrorEnvelope(value: unknown): value is ErrorEnvelope {
@@ -231,9 +359,15 @@ function timeoutSignal(caller: AbortSignal | undefined): AbortSignal {
  *
  * `method` and `path` are checked against the generated `paths`, so `apiRequest("post", "/auth/me")`
  * does not compile and neither does a login body with a misspelled field.
+ *
+ * `"patch"` was added for P11's `PATCH /dashboard/settings` (agents.md §10.11 task 10) — the first
+ * partial-update route this dashboard calls. Nothing above this line needed to change: the generic
+ * plumbing (`OperationOf`, `RequestBodyOf`, `SuccessBodyOf`, `PathsWith`) already reads whichever
+ * method key the caller names out of the generated `paths[P]`, so widening this union is the whole
+ * change.
  */
 export async function apiRequest<
-  M extends "get" | "post",
+  M extends "get" | "post" | "patch",
   P extends PathsWith<M> & keyof paths,
 >(
   method: M,
@@ -250,7 +384,11 @@ export async function apiRequest<
     headers.Authorization = `Bearer ${session.tokens.access_token}`;
   }
 
-  const { body, signal } = options as { body?: unknown; signal?: AbortSignal };
+  const { body, signal, sendSessionCookie } = options as {
+    body?: unknown;
+    signal?: AbortSignal;
+    sendSessionCookie?: boolean;
+  };
   if (body !== undefined) {
     headers["Content-Type"] = "application/json";
   }
@@ -261,10 +399,11 @@ export async function apiRequest<
       method: method.toUpperCase(),
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
-      // No cookie is ever sent or accepted. The backend sets none, and omitting them removes the
-      // ambient authority that CSRF depends on (agents.md §6.2 layer 1 lives on the token, not on
-      // the browser's willingness to attach one).
-      credentials: "omit",
+      // `"omit"` unless this one call asked otherwise, and `"omit"` is what keeps agents.md §6.2
+      // layer 1 on the token rather than on the browser's willingness to attach something. The
+      // opt-in is per call and by name — see `RequestOptions.sendSessionCookie` for the three that
+      // take it and why a blanket `"include"` would be a CSRF surface on every data endpoint.
+      credentials: sendSessionCookie === true ? "include" : "omit",
       signal: timeoutSignal(signal),
     });
   } catch (cause) {

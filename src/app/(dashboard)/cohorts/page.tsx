@@ -14,12 +14,15 @@
  * this file's only job is to fetch and render, not to guard authentication a second time.
  */
 
-import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { ApiError, CLIENT_ERROR_CODES, apiRequest } from "@/api/client";
 import type { components } from "@/api/generated";
 import { CohortCard } from "@/components/cohort-card";
+import { LinkButton } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
+import { PageHeader } from "@/components/ui/page-header";
+import { PageSkeleton } from "@/components/ui/skeleton";
 
 type CohortSummary = components["schemas"]["CohortSummary"];
 
@@ -66,30 +69,14 @@ export default function CohortsPage() {
 
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-24 p-32">
-      <div className="flex flex-wrap items-start justify-between gap-16">
-        <div className="flex flex-col gap-8">
-          <p className="text-eyebrow font-bold uppercase tracking-eyebrow text-text-secondary">
-            Cohorts
-          </p>
-          <h1 className="text-display-2 text-text-primary">Cohorts</h1>
-          <p className="max-w-md text-body text-text-secondary">
-            Grouped by the calendar month each worker started. A roster row with no start date is
-            pooled into one cohort until the file is corrected.
-          </p>
-        </div>
-        <Link
-          href="/cohorts/upload"
-          className="flex min-h-48 shrink-0 items-center rounded-control bg-action-primary px-24 text-label font-bold text-text-inverse transition-colors duration-[var(--duration-fast)] ease-standard hover:bg-action-primary-hover focus-visible:outline-hidden focus-visible:inset-shadow-focus-mint"
-        >
-          Upload roster
-        </Link>
-      </div>
+      <PageHeader
+        eyebrow="Cohorts"
+        title="Cohorts"
+        description="Grouped by the calendar month each worker started. A roster row with no start date is pooled into one cohort until the file is corrected."
+        actions={<LinkButton href="/cohorts/upload">Upload roster</LinkButton>}
+      />
 
-      {state.status === "loading" ? (
-        <p role="status" className="text-body text-text-secondary">
-          Loading cohorts…
-        </p>
-      ) : null}
+      {state.status === "loading" ? <PageSkeleton label="Loading cohorts…" shape="grid" /> : null}
 
       {state.status === "error" ? (
         <div
@@ -102,9 +89,12 @@ export default function CohortsPage() {
       ) : null}
 
       {state.status === "loaded" && state.cohorts.length === 0 ? (
-        <p className="text-body text-text-secondary">
-          No cohorts yet. Upload a roster to form the first one.
-        </p>
+        <EmptyState
+          icon={<UsersGlyph />}
+          title="No cohorts yet"
+          description="Upload a roster of your new hires and Kayla forms the first cohort from it, grouped by the month each person started."
+          action={<LinkButton href="/cohorts/upload">Upload your first roster</LinkButton>}
+        />
       ) : null}
 
       {state.status === "loaded" && state.cohorts.length > 0 ? (
@@ -120,5 +110,29 @@ export default function CohortsPage() {
         </div>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * Lucide `users` — the same glyph the rail uses for this section, so the empty state and the nav
+ * item a person just clicked are visibly the same place.
+ */
+function UsersGlyph() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width={24}
+      height={24}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
+    </svg>
   );
 }

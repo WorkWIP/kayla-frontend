@@ -33,13 +33,16 @@
  * copied from `kayla.kb.schemas.KbDocumentListResponse`, read directly.
  */
 
-import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
 import { ApiError, CLIENT_ERROR_CODES, getSession } from "@/api/client";
 import { env } from "@/env";
 import { KbDocumentCard, isKbDocumentTerminal } from "@/components/kb-document-card";
 import type { KbDocument } from "@/components/kb-document-card";
+import { LinkButton } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
+import { PageHeader } from "@/components/ui/page-header";
+import { PageSkeleton } from "@/components/ui/skeleton";
 
 const API_ROOT = env.NEXT_PUBLIC_API_BASE_URL.replace(/\/+$/, "");
 
@@ -169,30 +172,14 @@ export default function KnowledgeBasePage() {
 
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-24 p-32">
-      <div className="flex flex-wrap items-start justify-between gap-16">
-        <div className="flex flex-col gap-8">
-          <p className="text-eyebrow font-bold uppercase tracking-eyebrow text-text-secondary">
-            Knowledge Base
-          </p>
-          <h1 className="text-display-2 text-text-primary">Knowledge Base</h1>
-          <p className="max-w-md text-body text-text-secondary">
-            Upload your employee handbook and policy documents so Kayla can answer questions from
-            them, with a citation back to the exact section every time.
-          </p>
-        </div>
-        <Link
-          href="/knowledge-base/upload"
-          className="flex min-h-48 shrink-0 items-center rounded-control bg-action-primary px-24 text-label font-bold text-text-inverse transition-colors duration-[var(--duration-fast)] ease-standard hover:bg-action-primary-hover focus-visible:outline-hidden focus-visible:inset-shadow-focus-mint"
-        >
-          Upload document
-        </Link>
-      </div>
+      <PageHeader
+        eyebrow="Knowledge Base"
+        title="Knowledge Base"
+        description="Upload your employee handbook and policy documents so Kayla can answer questions from them, with a citation back to the exact section every time."
+        actions={<LinkButton href="/knowledge-base/upload">Upload document</LinkButton>}
+      />
 
-      {state.status === "loading" ? (
-        <p role="status" className="text-body text-text-secondary">
-          Loading documents…
-        </p>
-      ) : null}
+      {state.status === "loading" ? <PageSkeleton label="Loading documents…" /> : null}
 
       {state.status === "error" ? (
         <div
@@ -207,13 +194,16 @@ export default function KnowledgeBasePage() {
       ) : null}
 
       {state.status === "loaded" && state.documents.length === 0 ? (
-        <p className="text-body text-text-secondary">
-          No documents yet. Upload a handbook or policy document to get started.
-        </p>
+        <EmptyState
+          icon={<DocumentGlyph />}
+          title="No documents yet"
+          description="Kayla answers a new hire’s policy questions only from what you upload here — never from the open internet, and never without citing the section it drew from."
+          action={<LinkButton href="/knowledge-base/upload">Upload your handbook</LinkButton>}
+        />
       ) : null}
 
       {state.status === "loaded" && state.documents.length > 0 ? (
-        <ul className="flex list-none flex-col gap-16 p-0">
+        <ul className="flex list-none flex-col gap-16 p-[0]">
           {state.documents.map((document) => (
             <li key={document.id}>
               <KbDocumentCard document={document} />
@@ -222,5 +212,27 @@ export default function KnowledgeBasePage() {
         </ul>
       ) : null}
     </div>
+  );
+}
+
+/** Lucide `file-text` — the same glyph the rail uses for this section. */
+function DocumentGlyph() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width={24}
+      height={24}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
+      <path d="M14 2v6h6" />
+      <path d="M8 13h8" />
+      <path d="M8 17h8" />
+    </svg>
   );
 }

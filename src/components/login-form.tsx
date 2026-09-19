@@ -42,6 +42,8 @@ import type { FormEvent } from "react";
 
 import { ApiError, CLIENT_ERROR_CODES, apiRequest, clearSession, setSession } from "@/api/client";
 import type { UserRole } from "@/api/client";
+import { Button } from "@/components/ui/button";
+import { TextField } from "@/components/ui/field";
 
 /**
  * Which surface each role signs in on, mirroring `kayla.auth.tokens.audience_for_role`.
@@ -65,8 +67,11 @@ const ROLE_SURFACE = {
   superadmin: "dashboard",
 } as const satisfies Record<UserRole, "worker" | "dashboard" | "none">;
 
-/** Where a signed-in dashboard user lands. P4 replaces this with the real Overview route. */
-const POST_LOGIN_DESTINATION = "/cohorts";
+/** Where a signed-in dashboard user lands — the real Overview route (agents.md §10.11 task 7),
+ * now `(dashboard)/overview/page.tsx`. It used to be "/" itself; "/" is being freed for a public
+ * marketing landing page, so this moved with the page rather than being left pointing at a URL
+ * that will soon belong to something else. `login/page.test.tsx` asserts this exact value. */
+const POST_LOGIN_DESTINATION = "/overview";
 
 /** The invitation link's query parameter, and the key it is remembered under. */
 const ORG_QUERY_PARAM = "org";
@@ -238,11 +243,12 @@ export function LoginForm() {
   const formId = useId();
   const emailId = `${formId}-email`;
   const passwordId = `${formId}-password`;
-  const emailErrorId = `${emailId}-error`;
-  const passwordErrorId = `${passwordId}-error`;
+  // `TextField` derives its own `<input id>-error` id, so these two are no longer spelled out
+  // here — the ids it generates for `emailId`/`passwordId` are byte-identical to the ones this
+  // file used to build, which is what keeps `login/page.test.tsx`'s `aria-describedby` read-back
+  // passing unchanged.
   const noticeId = `${formId}-notice`;
   const pastedOrgId = `${formId}-org`;
-  const pastedOrgErrorId = `${pastedOrgId}-error`;
 
   // Carry the organisation forward, so the next visit to /login works without the invitation link.
   useEffect(() => {
@@ -276,6 +282,13 @@ export function LoginForm() {
     try {
       const session = await apiRequest("post", "/auth/login", {
         body: { org_id: orgId, email: email.trim(), password },
+        // The one thing this call needs the cookie for is *receiving* it. `credentials: "omit"` —
+        // the default everywhere else in this app — makes the browser ignore `Set-Cookie`
+        // altogether, so without this the backend's refresh cookie would be sent and silently
+        // dropped, and every page reload would sign the user out again with nothing anywhere
+        // explaining why. The cookie is `HttpOnly`, so this code cannot read what it just accepted;
+        // the session it keeps is still the access token below and nothing more.
+        sendSessionCookie: true,
       });
 
       const surface = ROLE_SURFACE[session.user.role];
@@ -337,31 +350,18 @@ export function LoginForm() {
           }}
           className="flex flex-col gap-8"
         >
-          <label htmlFor={pastedOrgId} className="text-field-label font-bold text-text-primary">
-            {COPY.orgLabel}
-          </label>
-          <input
+          <TextField
             id={pastedOrgId}
             name="organisation"
-            type="text"
+            label={COPY.orgLabel}
             value={pastedOrg}
-            onChange={(event) => setPastedOrg(event.target.value)}
-            aria-invalid={pastedOrgError !== null}
-            aria-describedby={pastedOrgError !== null ? pastedOrgErrorId : undefined}
+            onValueChange={setPastedOrg}
+            error={pastedOrgError ?? undefined}
             placeholder={COPY.orgPlaceholder}
-            className="min-h-48 w-full rounded-control bg-surface-card px-16 text-body text-text-primary inset-shadow-field focus-visible:outline-hidden focus-visible:inset-shadow-focus-mint"
           />
-          {pastedOrgError !== null ? (
-            <p id={pastedOrgErrorId} className="text-label text-text-critical">
-              {pastedOrgError}
-            </p>
-          ) : null}
-          <button
-            type="submit"
-            className="min-h-48 w-full rounded-control bg-action-primary px-24 text-label font-bold text-text-inverse transition-colors duration-[var(--duration-fast)] ease-standard hover:bg-action-primary-hover focus-visible:outline-hidden focus-visible:inset-shadow-focus-mint"
-          >
+          <Button type="submit" fullWidth>
             {COPY.orgSubmit}
-          </button>
+          </Button>
         </form>
       </section>
     );
@@ -391,78 +391,41 @@ export function LoginForm() {
         </div>
       ) : null}
 
-      <div className="flex flex-col gap-8">
-        <label htmlFor={emailId} className="text-field-label font-bold text-text-primary">
-          {COPY.emailLabel}
-        </label>
-        <input
-          ref={emailRef}
-          id={emailId}
-          name="email"
-          type="email"
-          value={email}
-          onChange={(event) => {
-            setEmail(event.target.value);
-          }}
-          maxLength={EMAIL_MAX_LENGTH}
-          autoComplete="username"
-          autoCapitalize="none"
-          spellCheck={false}
-          required
-          aria-required="true"
-          aria-invalid={fieldErrors.email !== undefined}
-          aria-describedby={fieldErrors.email !== undefined ? emailErrorId : undefined}
-          className="min-h-48 w-full rounded-control border border-lilac-400 bg-surface-card px-16 text-body text-text-primary focus-visible:border-border-focus focus-visible:outline-hidden focus-visible:inset-shadow-focus-plum"
-        />
-        {fieldErrors.email !== undefined ? (
-          // role="alert" (not aria-live="polite"): this element does not exist on first paint —
-          // it is inserted as a direct consequence of a failed submit, often while the input it
-          // describes already has focus (Enter from an empty required field). A live region only
-          // announces a change to content already in the accessibility tree; freshly-mounted
-          // content needs an *implicit* live region, which role="alert" provides regardless of
-          // whether anything's focus actually moved. Matches the server-error region below.
-          <p id={emailErrorId} role="alert" className="text-copy text-text-primary">
-            {fieldErrors.email}
-          </p>
-        ) : null}
-      </div>
+      <TextField
+        id={emailId}
+        inputRef={emailRef}
+        name="email"
+        type="email"
+        label={COPY.emailLabel}
+        value={email}
+        onValueChange={setEmail}
+        error={fieldErrors.email}
+        maxLength={EMAIL_MAX_LENGTH}
+        autoComplete="username"
+        autoCapitalize="none"
+        spellCheck={false}
+        required
+        aria-required="true"
+      />
 
-      <div className="flex flex-col gap-8">
-        <label htmlFor={passwordId} className="text-field-label font-bold text-text-primary">
-          {COPY.passwordLabel}
-        </label>
-        <input
-          ref={passwordRef}
-          id={passwordId}
-          name="password"
-          type="password"
-          value={password}
-          onChange={(event) => {
-            setPassword(event.target.value);
-          }}
-          maxLength={PASSWORD_MAX_LENGTH}
-          autoComplete="current-password"
-          required
-          aria-required="true"
-          aria-invalid={fieldErrors.password !== undefined}
-          aria-describedby={fieldErrors.password !== undefined ? passwordErrorId : undefined}
-          className="min-h-48 w-full rounded-control border border-lilac-400 bg-surface-card px-16 text-body text-text-primary focus-visible:border-border-focus focus-visible:outline-hidden focus-visible:inset-shadow-focus-plum"
-        />
-        {fieldErrors.password !== undefined ? (
-          // See the email field's error <p> above for why role="alert" and not aria-live.
-          <p id={passwordErrorId} role="alert" className="text-copy text-text-primary">
-            {fieldErrors.password}
-          </p>
-        ) : null}
-      </div>
+      <TextField
+        id={passwordId}
+        inputRef={passwordRef}
+        name="password"
+        type="password"
+        label={COPY.passwordLabel}
+        value={password}
+        onValueChange={setPassword}
+        error={fieldErrors.password}
+        maxLength={PASSWORD_MAX_LENGTH}
+        autoComplete="current-password"
+        required
+        aria-required="true"
+      />
 
-      <button
-        type="submit"
-        disabled={submitting}
-        className="min-h-48 w-full rounded-control bg-action-primary px-24 text-label font-bold text-text-inverse transition-colors duration-[var(--duration-fast)] ease-standard hover:bg-action-primary-hover focus-visible:outline-hidden focus-visible:inset-shadow-focus-mint disabled:bg-action-disabled disabled:text-text-secondary"
-      >
-        {submitting ? COPY.submitting : COPY.submit}
-      </button>
+      <Button type="submit" fullWidth loading={submitting} loadingLabel={COPY.submitting}>
+        {COPY.submit}
+      </Button>
     </form>
   );
 }

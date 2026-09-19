@@ -1,5 +1,4 @@
-import Link from "next/link";
-
+import { LinkButton } from "@/components/ui/button";
 import { env } from "@/env";
 
 /**
@@ -52,16 +51,12 @@ export default function DebugTokensPage() {
           prove the generated design tokens resolve end to end.
         </p>
         {/*
-          P1 (agents.md §10.1) adds the first real screen. min-h-48 is the first step of the
-          design system's spacing scale at or above the 44x44 minimum target of §5.6, and the
-          browser's own focus ring is left in place rather than replaced.
+          The shared button skin (`@/components/ui/button`), so this diagnostic page cannot drift
+          from the real one. It used to carry its own copy of the class string and leave the
+          browser's native focus ring in place; the shared skin swaps that for the design
+          system's own `--ring-focus-mint`, which is a visible indicator by the same rule.
         */}
-        <Link
-          href="/login"
-          className="inline-flex min-h-48 w-fit items-center rounded-control bg-action-primary px-24 text-label font-bold text-text-inverse hover:bg-action-primary-hover"
-        >
-          Sign in to the dashboard
-        </Link>
+        <LinkButton href="/login">Sign in to the dashboard</LinkButton>
       </header>
 
       <section aria-labelledby="configuration-heading" className="flex flex-col gap-16">
@@ -86,7 +81,7 @@ export default function DebugTokensPage() {
         <h2 id="colour-heading" className="text-section text-text-primary">
           Colour tokens
         </h2>
-        <ul className="grid list-none grid-cols-2 gap-16 p-0 sm:grid-cols-3">
+        <ul className="grid list-none grid-cols-2 gap-16 p-[0] sm:grid-cols-3">
           {COLOR_TOKENS.map((token) => (
             <li key={token} className="flex flex-col gap-8">
               <span
@@ -105,7 +100,7 @@ export default function DebugTokensPage() {
         <h2 id="type-heading" className="text-section text-text-primary">
           Type scale
         </h2>
-        <ul className="flex list-none flex-col gap-16 p-0">
+        <ul className="flex list-none flex-col gap-16 p-[0]">
           {TYPE_SPECIMENS.map((specimen) => (
             <li key={specimen.utility} className="flex flex-col gap-4">
               <span className={`${specimen.utility} text-text-primary`}>{specimen.sample}</span>

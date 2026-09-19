@@ -316,16 +316,20 @@ describe("login screen — submitting", () => {
     signIn("  HR@example.com  ", "correct horse battery staple");
 
     await waitFor(() => {
-      expect(nav.replace).toHaveBeenCalledWith("/cohorts");
+      expect(nav.replace).toHaveBeenCalledWith("/overview");
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("http://localhost:8000/auth/login");
     expect(init.method).toBe("POST");
-    // No cookie is sent or stored: the token travels on the Authorization header instead, which is
-    // what removes the ambient authority CSRF depends on.
-    expect(init.credentials).toBe("omit");
+    // The one request in this app that accepts a cookie rather than ignoring one. `credentials:
+    // "omit"` — the default for every other call, and what removes the ambient authority CSRF
+    // depends on — makes the browser discard `Set-Cookie` outright, so without this the backend's
+    // `HttpOnly` refresh cookie would be sent and silently dropped, and every page reload would
+    // sign the user out again. The token still travels on the `Authorization` header; the cookie
+    // is unreadable from here and is only ever presented to `POST /auth/session`.
+    expect(init.credentials).toBe("include");
     expect(JSON.parse(String(init.body))).toEqual({
       org_id: ORG_ID,
       email: "HR@example.com",
@@ -343,6 +347,11 @@ describe("login screen — submitting", () => {
     });
 
     expect(getSession()?.tokens.access_token).toBe("access-token-value");
+
+    // The refresh token is dropped on arrival and never enters this bundle's memory: the
+    // dashboard's durable credential is the `HttpOnly` cookie, and a second script-readable copy
+    // of it would hand an XSS exactly what that cookie exists to deny.
+    expect(JSON.stringify(getSession())).not.toContain("refresh-token-value");
 
     // The whole point of the in-memory store: an XSS on this dashboard must not find a token that
     // reads a whole organisation's aggregate HR data. This fails the moment anyone "helpfully"

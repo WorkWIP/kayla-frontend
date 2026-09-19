@@ -56,7 +56,9 @@ export interface KbDocument {
   readonly updated_at: string;
 }
 
-type StatusTone = "neutral" | "positive" | "attention" | "critical";
+import { Badge } from "@/components/ui/badge";
+import type { BadgeTone } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
 
 /** `parsing` / `chunking` / `embedding` collapse to one "Processing" row in Q-51's own table —
  * `kayla.kb.models.KbDocumentStatus`'s own docstring documents this as 12 machine states behind
@@ -78,7 +80,7 @@ export function isKbDocumentTerminal(status: KbDocumentStatus): boolean {
 /** Colour is never the only signal here (agents.md §5.5) — `status_display`'s text is the real
  * signal; the tint is a reinforcement, keyed off the machine status rather than parsed back out
  * of the display string. */
-const STATUS_TONE: Readonly<Record<KbDocumentStatus, StatusTone>> = {
+const STATUS_TONE: Readonly<Record<KbDocumentStatus, BadgeTone>> = {
   uploaded: "neutral",
   parsing: "attention",
   chunking: "attention",
@@ -95,21 +97,14 @@ const STATUS_TONE: Readonly<Record<KbDocumentStatus, StatusTone>> = {
   superseded: "neutral",
 };
 
-const TONE_CLASS: Readonly<Record<StatusTone, string>> = {
-  neutral: "bg-surface-warm-gray text-text-secondary",
-  positive: "bg-status-positive-subtle text-status-positive",
-  attention: "bg-status-attention-subtle text-status-attention",
-  critical: "bg-status-critical-subtle text-status-critical",
-};
-
-function StatusBadge({ status, statusDisplay }: { readonly status: KbDocumentStatus; readonly statusDisplay: string }) {
-  return (
-    <span
-      className={`inline-flex w-fit items-center rounded-pill px-12 py-4 text-meta font-bold ${TONE_CLASS[STATUS_TONE[status]]}`}
-    >
-      {statusDisplay}
-    </span>
-  );
+function StatusBadge({
+  status,
+  statusDisplay,
+}: {
+  readonly status: KbDocumentStatus;
+  readonly statusDisplay: string;
+}) {
+  return <Badge tone={STATUS_TONE[status]}>{statusDisplay}</Badge>;
 }
 
 function formatUploadedDate(iso: string): string {
@@ -131,8 +126,8 @@ export function KbDocumentCard({ document }: KbDocumentCardProps) {
         : `${document.page_count} pages`;
 
   return (
-    <div className="flex flex-col gap-12 rounded-card border border-hairline-lilac bg-surface-card p-24 shadow-elevation-card sm:flex-row sm:items-start sm:justify-between">
-      <div className="flex min-w-0 flex-col gap-4">
+    <Card className="flex flex-col gap-12 sm:flex-row sm:items-start sm:justify-between">
+      <div className="flex min-w-[0] flex-col gap-4">
         <p className="truncate text-card-title font-extrabold text-text-primary">
           {document.title}
         </p>
@@ -148,7 +143,7 @@ export function KbDocumentCard({ document }: KbDocumentCardProps) {
       <div className="shrink-0">
         <StatusBadge status={document.status} statusDisplay={document.status_display} />
       </div>
-    </div>
+    </Card>
   );
 }
 

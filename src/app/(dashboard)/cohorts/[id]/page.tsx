@@ -32,6 +32,11 @@ import { useEffect, useState } from "react";
 
 import { ApiError, CLIENT_ERROR_CODES, getSession } from "@/api/client";
 import type { components } from "@/api/generated";
+import { LinkButton } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
+import { PageHeader } from "@/components/ui/page-header";
+import { PageSkeleton } from "@/components/ui/skeleton";
+import { Table, TableCell, TableEmptyRow, TableRow } from "@/components/ui/table";
 import { env } from "@/env";
 
 type CohortDetailResponse = components["schemas"]["CohortDetailResponse"];
@@ -107,6 +112,14 @@ async function fetchCohortDetail(cohortId: string): Promise<CohortDetailResponse
   }
 }
 
+/**
+ * The roster's own columns, in order. `cohorts/[id]/page.test.tsx` asserts this exact list comes
+ * back from `getAllByRole("columnheader")`. It stops at what a roster file carries: there is no
+ * column here for mood, signal or check-in status, and there is not going to be one
+ * (kb/MVP-SPEC.md §7 — "Rosters may list names. Signals may not attach to them.").
+ */
+const ROSTER_COLUMNS = ["Last name", "First name", "Email", "Start date", "Site", "Role"] as const;
+
 type LoadState =
   | { readonly status: "loading" }
   | { readonly status: "not_found" }
@@ -177,15 +190,15 @@ export default function CohortDetailPage() {
       </Link>
 
       {state.status === "loading" ? (
-        <p role="status" className="text-body text-text-secondary">
-          Loading cohort…
-        </p>
+        <PageSkeleton label="Loading cohort…" shape="form" count={5} />
       ) : null}
 
       {state.status === "not_found" ? (
-        <p className="text-body text-text-secondary">
-          No cohort with this id in your organisation.
-        </p>
+        <EmptyState
+          title="No cohort with this id in your organisation"
+          description="The link may be from another organisation, or the cohort may have been renamed when a newer roster reassigned its start month."
+          action={<LinkButton href="/cohorts" variant="secondary">Back to cohorts</LinkButton>}
+        />
       ) : null}
 
       {state.status === "error" ? (
@@ -200,68 +213,36 @@ export default function CohortDetailPage() {
 
       {state.status === "loaded" ? (
         <>
-          <header className="flex flex-col gap-8">
-            <p className="text-eyebrow font-bold uppercase tracking-eyebrow text-text-secondary">
-              Cohort
-            </p>
-            <h1 className="text-display-2 text-text-primary">{state.detail.cohort.label}</h1>
-            <p className="text-body text-text-secondary">
-              {state.detail.entries.length === 1
+          <PageHeader
+            eyebrow="Cohort"
+            title={state.detail.cohort.label}
+            description={
+              state.detail.entries.length === 1
                 ? "1 roster entry"
-                : `${state.detail.entries.length} roster entries`}
-            </p>
-          </header>
+                : `${state.detail.entries.length} roster entries`
+            }
+          />
 
-          <div className="overflow-x-auto rounded-card border border-hairline-lilac bg-surface-card">
-            <table className="w-full text-left text-copy">
-              <caption className="sr-only">
-                Roster entries in the {state.detail.cohort.label} cohort
-              </caption>
-              <thead className="bg-surface-warm-gray text-meta font-bold text-text-secondary">
-                <tr>
-                  <th scope="col" className="px-16 py-12">
-                    Last name
-                  </th>
-                  <th scope="col" className="px-16 py-12">
-                    First name
-                  </th>
-                  <th scope="col" className="px-16 py-12">
-                    Email
-                  </th>
-                  <th scope="col" className="px-16 py-12">
-                    Start date
-                  </th>
-                  <th scope="col" className="px-16 py-12">
-                    Site
-                  </th>
-                  <th scope="col" className="px-16 py-12">
-                    Role
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {state.detail.entries.length === 0 ? (
-                  <tr>
-                    <td colSpan={6} className="px-16 py-12 text-text-secondary">
-                      No roster entries in this cohort.
-                    </td>
-                  </tr>
-                ) : null}
-                {state.detail.entries.map((entry) => (
-                  <tr key={entry.id} className="border-t border-hairline-lilac">
-                    <td className="px-16 py-12 text-text-primary">{entry.last_name}</td>
-                    <td className="px-16 py-12 text-text-primary">{entry.first_name}</td>
-                    <td className="px-16 py-12 text-text-secondary">{entry.email}</td>
-                    <td className="px-16 py-12 text-text-secondary">
-                      {formatStartDate(entry.start_date)}
-                    </td>
-                    <td className="px-16 py-12 text-text-secondary">{entry.site_name ?? "—"}</td>
-                    <td className="px-16 py-12 text-text-secondary">{entry.role_title ?? "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <Table
+            caption={`Roster entries in the ${state.detail.cohort.label} cohort`}
+            headers={ROSTER_COLUMNS}
+          >
+            {state.detail.entries.length === 0 ? (
+              <TableEmptyRow colSpan={ROSTER_COLUMNS.length}>
+                No roster entries in this cohort.
+              </TableEmptyRow>
+            ) : null}
+            {state.detail.entries.map((entry) => (
+              <TableRow key={entry.id}>
+                <TableCell tone="primary">{entry.last_name}</TableCell>
+                <TableCell tone="primary">{entry.first_name}</TableCell>
+                <TableCell>{entry.email}</TableCell>
+                <TableCell>{formatStartDate(entry.start_date)}</TableCell>
+                <TableCell>{entry.site_name ?? "—"}</TableCell>
+                <TableCell>{entry.role_title ?? "—"}</TableCell>
+              </TableRow>
+            ))}
+          </Table>
         </>
       ) : null}
     </div>

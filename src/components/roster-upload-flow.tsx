@@ -50,12 +50,15 @@
  * real `<table>` with `<th scope="col">`, never a div grid.
  */
 
-import Link from "next/link";
 import { useId, useRef, useState } from "react";
 import type { ChangeEvent } from "react";
 
 import { ApiError, CLIENT_ERROR_CODES, apiRequest, getSession } from "@/api/client";
 import type { components } from "@/api/generated";
+import { Badge } from "@/components/ui/badge";
+import type { BadgeTone } from "@/components/ui/badge";
+import { Button, LinkButton } from "@/components/ui/button";
+import { Table, TableCell, TableRow } from "@/components/ui/table";
 import { env } from "@/env";
 
 type RosterPreviewResponse = components["schemas"]["RosterPreviewResponse"];
@@ -96,21 +99,16 @@ const DIAGNOSIS_COPY: Readonly<Record<Diagnosis, string>> = {
 
 /** Colour is never the only signal here (agents.md §5.5) — every badge carries the word above
  * as well as the tint. */
-const DIAGNOSIS_CLASS: Readonly<Record<Diagnosis, string>> = {
-  new: "bg-status-positive-subtle text-status-positive",
-  updated: "bg-status-attention-subtle text-status-attention",
-  unchanged: "bg-surface-warm-gray text-text-secondary",
-  invalid: "bg-status-critical-subtle text-status-critical",
+/** Which diagnosis deserves which pill. Domain knowledge, so it stays here, not in `Badge`. */
+const DIAGNOSIS_TONE: Readonly<Record<Diagnosis, BadgeTone>> = {
+  new: "positive",
+  updated: "attention",
+  unchanged: "neutral",
+  invalid: "critical",
 };
 
 function DiagnosisBadge({ diagnosis }: { readonly diagnosis: Diagnosis }) {
-  return (
-    <span
-      className={`inline-flex items-center rounded-pill px-12 py-4 text-meta font-bold ${DIAGNOSIS_CLASS[diagnosis]}`}
-    >
-      {DIAGNOSIS_COPY[diagnosis]}
-    </span>
-  );
+  return <Badge tone={DIAGNOSIS_TONE[diagnosis]}>{DIAGNOSIS_COPY[diagnosis]}</Badge>;
 }
 
 function isErrorEnvelope(value: unknown): value is ErrorEnvelope {
@@ -200,17 +198,14 @@ function messageFor(error: unknown, fallback: string): string {
   return fallback;
 }
 
+const MAPPING_COLUMNS = ["Roster field", "Column in your file"] as const;
+const ROW_COLUMNS = ["Row", "Name", "Email", "Status"] as const;
+
 type Step = "select" | "review" | "confirm" | "result";
 
 interface PreviewData extends RosterPreviewResponse {
   readonly fileName: string;
 }
-
-const PRIMARY_BUTTON =
-  "flex min-h-48 items-center justify-center rounded-control bg-action-primary px-24 text-label font-bold text-text-inverse transition-colors duration-[var(--duration-fast)] ease-standard hover:bg-action-primary-hover focus-visible:outline-hidden focus-visible:inset-shadow-focus-mint disabled:bg-action-disabled disabled:text-text-secondary";
-
-const SECONDARY_BUTTON =
-  "flex min-h-48 items-center justify-center rounded-control border border-hairline-lilac bg-surface-card px-24 text-label font-bold text-text-primary transition-colors duration-[var(--duration-fast)] ease-standard hover:bg-surface-warm-gray focus-visible:outline-hidden focus-visible:inset-shadow-focus-plum disabled:text-text-tertiary";
 
 export interface RosterUploadFlowProps {
   /** Called once an upload actually commits. Optional — the flow's own result step already
@@ -377,111 +372,74 @@ export function RosterUploadFlow({ onConfirmed }: RosterUploadFlowProps = {}) {
 
           <section className="flex flex-col gap-8">
             <h2 className="text-title text-text-primary">Column mapping</h2>
-            <div className="overflow-x-auto rounded-card border border-hairline-lilac">
-              <table className="w-full text-left text-copy">
-                <caption className="sr-only">
-                  Which column in {preview.fileName} was read as each roster field
-                </caption>
-                <thead className="bg-surface-warm-gray text-meta font-bold text-text-secondary">
-                  <tr>
-                    <th scope="col" className="px-16 py-12">
-                      Roster field
-                    </th>
-                    <th scope="col" className="px-16 py-12">
-                      Column in your file
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {mappingRows.map((row) => (
-                    <tr key={row.field} className="border-t border-hairline-lilac">
-                      <td className="px-16 py-12 font-medium text-text-primary">{row.field}</td>
-                      <td className="px-16 py-12 text-text-secondary">
-                        {row.header ?? "Not in this file"}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <Table
+              caption={`Which column in ${preview.fileName} was read as each roster field`}
+              headers={MAPPING_COLUMNS}
+            >
+              {mappingRows.map((row) => (
+                <TableRow key={row.field}>
+                  <TableCell tone="primary" className="font-medium">
+                    {row.field}
+                  </TableCell>
+                  <TableCell>{row.header ?? "Not in this file"}</TableCell>
+                </TableRow>
+              ))}
+            </Table>
           </section>
 
           <section className="flex flex-col gap-8">
             <h2 className="text-title text-text-primary">Rows in this file</h2>
-            <div className="overflow-x-auto rounded-card border border-hairline-lilac">
-              <table className="w-full text-left text-copy">
-                <caption className="sr-only">
-                  Every row in {preview.fileName} and what would happen to it
-                </caption>
-                <thead className="bg-surface-warm-gray text-meta font-bold text-text-secondary">
-                  <tr>
-                    <th scope="col" className="px-16 py-12">
-                      Row
-                    </th>
-                    <th scope="col" className="px-16 py-12">
-                      Name
-                    </th>
-                    <th scope="col" className="px-16 py-12">
-                      Email
-                    </th>
-                    <th scope="col" className="px-16 py-12">
-                      Status
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {preview.rows.map((row) => {
-                    const isInvalid = row.diagnosis === "invalid";
-                    const problemsId = `${flowId}-row-${row.row_number}-problems`;
-                    return (
-                      <tr
-                        key={row.row_number}
-                        aria-invalid={isInvalid}
-                        aria-describedby={isInvalid ? problemsId : undefined}
-                        className="border-t border-hairline-lilac"
-                      >
-                        <td className="px-16 py-12 text-text-secondary">{row.row_number}</td>
-                        <td className="px-16 py-12 text-text-primary">
-                          {row.last_name || row.first_name
-                            ? `${row.last_name}, ${row.first_name}`.replace(/^, /, "").replace(/, $/, "")
-                            : "—"}
-                        </td>
-                        <td className="px-16 py-12 text-text-secondary">{row.email || "—"}</td>
-                        <td className="px-16 py-12">
-                          <div className="flex flex-col gap-4">
-                            <DiagnosisBadge diagnosis={row.diagnosis} />
-                            {isInvalid ? (
-                              <p id={problemsId} className="text-copy text-status-critical">
-                                {(row.problems ?? []).map(describeProblem).join("; ")}
-                              </p>
-                            ) : null}
-                            {row.diagnosis === "updated" && (row.changes ?? []).length > 0 ? (
-                              <p className="text-meta text-text-secondary">
-                                Changes: {(row.changes ?? []).map((change) => change.field).join(", ")}
-                              </p>
-                            ) : null}
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+            <Table
+              caption={`Every row in ${preview.fileName} and what would happen to it`}
+              headers={ROW_COLUMNS}
+            >
+              {preview.rows.map((row) => {
+                const isInvalid = row.diagnosis === "invalid";
+                const problemsId = `${flowId}-row-${row.row_number}-problems`;
+                return (
+                  <TableRow
+                    key={row.row_number}
+                    aria-invalid={isInvalid}
+                    aria-describedby={isInvalid ? problemsId : undefined}
+                  >
+                    <TableCell>{row.row_number}</TableCell>
+                    <TableCell tone="primary">
+                      {row.last_name || row.first_name
+                        ? `${row.last_name}, ${row.first_name}`.replace(/^, /, "").replace(/, $/, "")
+                        : "—"}
+                    </TableCell>
+                    <TableCell>{row.email || "—"}</TableCell>
+                    <TableCell>
+                      <div className="flex flex-col gap-4">
+                        <DiagnosisBadge diagnosis={row.diagnosis} />
+                        {isInvalid ? (
+                          <p id={problemsId} className="text-copy text-status-critical">
+                            {(row.problems ?? []).map(describeProblem).join("; ")}
+                          </p>
+                        ) : null}
+                        {row.diagnosis === "updated" && (row.changes ?? []).length > 0 ? (
+                          <p className="text-meta text-text-secondary">
+                            Changes: {(row.changes ?? []).map((change) => change.field).join(", ")}
+                          </p>
+                        ) : null}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </Table>
           </section>
 
           <div className="flex flex-wrap gap-12">
-            <button type="button" onClick={handleChooseDifferentFile} className={SECONDARY_BUTTON}>
+            <Button variant="secondary" onClick={handleChooseDifferentFile}>
               Choose a different file
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
               onClick={() => setStep("confirm")}
               disabled={preview.summary.invalid_count > 0}
-              className={PRIMARY_BUTTON}
             >
               Continue
-            </button>
+            </Button>
           </div>
         </div>
       ) : null}
@@ -521,25 +479,18 @@ export function RosterUploadFlow({ onConfirmed }: RosterUploadFlowProps = {}) {
           ) : null}
 
           <div className="flex flex-wrap gap-12">
-            <button
-              type="button"
-              onClick={() => setStep("review")}
-              disabled={confirming}
-              className={SECONDARY_BUTTON}
-            >
+            <Button variant="secondary" onClick={() => setStep("review")} disabled={confirming}>
               Back
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
               onClick={() => {
                 void handleConfirm();
               }}
-              disabled={confirming}
-              aria-busy={confirming}
-              className={PRIMARY_BUTTON}
+              loading={confirming}
+              loadingLabel="Uploading…"
             >
-              {confirming ? "Uploading…" : "Confirm upload"}
-            </button>
+              Confirm upload
+            </Button>
           </div>
         </div>
       ) : null}
@@ -553,9 +504,7 @@ export function RosterUploadFlow({ onConfirmed }: RosterUploadFlowProps = {}) {
             <li>{result.unchanged_count} unchanged</li>
             <li>{result.total_rows} total rows</li>
           </ul>
-          <Link href="/cohorts" className={`w-fit ${PRIMARY_BUTTON}`}>
-            View cohorts
-          </Link>
+          <LinkButton href="/cohorts">View cohorts</LinkButton>
         </div>
       ) : null}
     </div>

@@ -6,58 +6,120 @@
  * This module does not hold a session of its own — `src/api/client.ts` already does that,
  * deliberately in a module-scoped variable and nowhere else (see the `SESSION` docstring
  * there). Duplicating that store here would give the app two answers to "am I signed in?"
- * that could drift apart. This file only *reads* that store and turns "no session" into a
- * redirect, which is the one piece `client.ts` cannot own: it is API-shaped and knows
- * nothing about routes.
+ * that could drift apart. This file only *reads* that store, asks it once to restore itself
+ * from the backend's cookie, and turns "no session" into a redirect — which is the piece
+ * `client.ts` cannot own: it is API-shaped and knows nothing about routes.
  *
  * --------------------------------------------------------------------------------------------
- * Known limitation, by design, not an oversight
+ * Why this is three states and not two
  * --------------------------------------------------------------------------------------------
- * The access token lives in memory only (never `localStorage`, per P1's reconciliation — see
- * `client.ts`). A full page reload therefore always signs the user out, even mid-session: there
- * is no refresh-token bootstrap wired into the dashboard yet, and the browser has no safe place
- * to keep one anyway. `useAuthenticatedSession` reflects that honestly — it does not try to
- * recover a session from storage or a cookie the backend never sets. The redirect below on a
- * missing session is therefore the *correct* behaviour after a reload, not a bug to route
- * around with a mechanism this phase was not asked to build.
+ * It used to be two, and that was correct while the read was synchronous: `getSession()` either
+ * had a session or it did not, and "not" meant "signed out", so the shell could redirect on the
+ * spot and render nothing in the meantime.
  *
- * A second, related limitation: because this hook only re-evaluates when the component that
- * calls it re-renders for some other reason, it will not notice a session that expires while
- * the person stays on the same client-side route. Anything that ends a session explicitly
- * (e.g. "Sign out") must call `clearSession()` *and* navigate to `/login` itself rather than
- * rely on this hook to notice — see `sidebar-nav.tsx`.
+ * Restoring from a cookie is a network round trip, so "not yet" is now a third, real answer, and
+ * collapsing it into "signed out" would redirect to `/login` on **every legitimate reload** —
+ * flashing the sign-in page at someone who is signed in, and racing the restore that was about to
+ * succeed. The three states are therefore explicit:
+ *
+ *   restoring   we are asking; render neutral chrome, redirect nowhere, decide nothing
+ *   signed-in   a session is in memory; render the dashboard
+ *   signed-out  we asked and there is nothing; redirect to /login
+ *
+ * A session already in memory — the ordinary case, one client-side navigation after signing in —
+ * skips `restoring` entirely: the initial state is computed from `getSession()` during the first
+ * render, so there is no frame in which a signed-in person sees a skeleton.
+ *
+ * The restore runs **once per mount**, guarded by a ref rather than by the effect's dependency
+ * list, because React Strict Mode mounts an effect twice in development and two concurrent calls
+ * to `POST /auth/session` would rotate the same cookie twice — the second one presenting a token
+ * the first had already spent, which is reuse detection's definition of a stolen token and would
+ * revoke the whole family. One call, once, is not an optimisation here; it is correctness.
+ *
+ * --------------------------------------------------------------------------------------------
+ * What the restore can and cannot recover, unchanged from before
+ * --------------------------------------------------------------------------------------------
+ * The access token still lives in memory only, and this module still does not go looking for one
+ * in `localStorage`. What a reload recovers is a *new* access token, minted by the backend from an
+ * `HttpOnly` cookie this code cannot read, through `POST /auth/session` — whose response carries no
+ * refresh token, so nothing durable ever enters this bundle. A person with no cookie (a first
+ * visit, a cleared jar, a seven-day-old cookie) is signed out exactly as they were before, and the
+ * redirect below is still the correct answer for them.
+ *
+ * The second, older limitation is also unchanged: this hook only re-evaluates when the component
+ * calling it re-renders, so it will not notice a session that expires while the person stays on one
+ * client-side route. Anything that ends a session explicitly (e.g. "Sign out") must still tell the
+ * server, clear the session and navigate itself rather than rely on this hook to notice — see
+ * `sidebar-nav.tsx`.
  */
 
 import { useRouter } from "next/navigation";
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import { getSession } from "@/api/client";
-import type { Session } from "@/api/client";
+import { getSession, restoreSession } from "@/api/client";
+import type { ActiveSession } from "@/api/client";
 
 /** Where an unauthenticated visitor to a dashboard route is sent. */
 export const LOGIN_ROUTE = "/login";
 
 /**
- * The current session, or `null` while a redirect to `/login` is in flight.
+ * The three answers to "am I signed in?", as a discriminated union.
+ *
+ * A union rather than `ActiveSession | null` plus a boolean: two independent fields have four
+ * combinations, two of which are nonsense ("restoring, and here is the session"), and the whole
+ * point of this change is that the caller must not be able to treat "not yet" as "no".
+ */
+export type SessionState =
+  | { readonly status: "restoring" }
+  | { readonly status: "signed-in"; readonly session: ActiveSession }
+  | { readonly status: "signed-out" };
+
+const RESTORING: SessionState = { status: "restoring" };
+const SIGNED_OUT: SessionState = { status: "signed-out" };
+
+function fromStore(): SessionState {
+  const session = getSession();
+  return session === null ? RESTORING : { status: "signed-in", session };
+}
+
+/**
+ * The session state for the authenticated shell, restoring it from the backend's cookie if needed.
  *
  * Call this once, near the top of the authenticated shell (`dashboard-shell.tsx`), not in every
- * screen beneath it — the redirect is a side effect and firing it from several places at once
- * is harder to reason about than firing it from exactly one.
+ * screen beneath it — the restore is a network call and the redirect is a side effect, and firing
+ * either from several places at once is harder to reason about than firing it from exactly one.
  */
-export function useAuthenticatedSession(): Session | null {
+export function useAuthenticatedSession(): SessionState {
   const router = useRouter();
-
-  // A plain read, not React state: `client.ts` is the single source of truth for the session,
-  // and mirroring it into `useState` would be a second copy that could disagree with the first
-  // the moment something (e.g. `clearSession()`) changes the original without going through
-  // this hook.
-  const session = getSession();
+  // Computed during the first render, not in an effect: a session that is already in memory must
+  // never produce a `restoring` frame, or every client-side navigation into the dashboard would
+  // flash a skeleton over a page that was ready to draw.
+  const [state, setState] = useState<SessionState>(fromStore);
+  const asked = useRef(false);
 
   useEffect(() => {
-    if (session === null) {
+    if (asked.current || state.status !== "restoring") return;
+    // Set before the call, not after it: Strict Mode's double-mount runs this effect twice in the
+    // same tick, and a second `POST /auth/session` would present a cookie the first call has
+    // already spent — which the backend reads, correctly, as a stolen token and answers by
+    // revoking the entire refresh family.
+    asked.current = true;
+
+    let live = true;
+    void restoreSession().then((session) => {
+      if (!live) return;
+      setState(session === null ? SIGNED_OUT : { status: "signed-in", session });
+    });
+    return () => {
+      live = false;
+    };
+  }, [state.status]);
+
+  useEffect(() => {
+    if (state.status === "signed-out") {
       router.replace(LOGIN_ROUTE);
     }
-  }, [session, router]);
+  }, [state.status, router]);
 
-  return session;
+  return state;
 }

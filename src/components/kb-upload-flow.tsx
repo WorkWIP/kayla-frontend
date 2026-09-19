@@ -86,6 +86,7 @@ import { useId, useRef, useState } from "react";
 import type { ChangeEvent, FormEvent } from "react";
 
 import { ApiError, CLIENT_ERROR_CODES, getSession } from "@/api/client";
+import { Button } from "@/components/ui/button";
 import { env } from "@/env";
 
 const API_ROOT = env.NEXT_PUBLIC_API_BASE_URL.replace(/\/+$/, "");
@@ -435,14 +436,9 @@ export function KbUploadFlow({ onConfirmed }: KbUploadFlowProps = {}) {
       ) : null}
 
       <div className="flex flex-wrap gap-12">
-        <button
-          type="submit"
-          disabled={busy}
-          aria-busy={busy}
-          className="flex min-h-48 items-center justify-center rounded-control bg-action-primary px-24 text-label font-bold text-text-inverse transition-colors duration-[var(--duration-fast)] ease-standard hover:bg-action-primary-hover focus-visible:outline-hidden focus-visible:inset-shadow-focus-mint disabled:bg-action-disabled disabled:text-text-secondary"
-        >
-          {busy ? "Uploading…" : "Upload document"}
-        </button>
+        <Button type="submit" loading={busy} loadingLabel="Uploading…">
+          Upload document
+        </Button>
       </div>
     </form>
   );

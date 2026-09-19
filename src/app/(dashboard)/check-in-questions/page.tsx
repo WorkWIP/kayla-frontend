@@ -56,6 +56,9 @@ import { useEffect, useState } from "react";
 import { ApiError, CLIENT_ERROR_CODES, apiRequest } from "@/api/client";
 import { CheckinQuestionCard } from "@/components/checkin-question-card";
 import type { CheckinQuestion } from "@/components/checkin-question-card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { PageHeader } from "@/components/ui/page-header";
+import { PageSkeleton } from "@/components/ui/skeleton";
 
 type LoadState =
   | { readonly status: "loading" }
@@ -125,22 +128,13 @@ export default function CheckInQuestionsPage() {
 
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-24 p-32">
-      <div className="flex flex-col gap-8">
-        <p className="text-eyebrow font-bold uppercase tracking-eyebrow text-text-secondary">
-          Check-in Questions
-        </p>
-        <h1 className="text-display-2 text-text-primary">Check-in Questions</h1>
-        <p className="max-w-md text-body text-text-secondary">
-          What Kayla asks new hires at each milestone check-in, and when. This view shows the
-          current, active question set for this organization. Editing is not available yet.
-        </p>
-      </div>
+      <PageHeader
+        eyebrow="Check-in Questions"
+        title="Check-in Questions"
+        description="What Kayla asks new hires at each milestone check-in, and when. This view shows the current, active question set for this organization. Editing is not available yet."
+      />
 
-      {state.status === "loading" ? (
-        <p role="status" className="text-body text-text-secondary">
-          Loading the question set…
-        </p>
-      ) : null}
+      {state.status === "loading" ? <PageSkeleton label="Loading the question set…" /> : null}
 
       {state.status === "error" ? (
         <div
@@ -155,9 +149,10 @@ export default function CheckInQuestionsPage() {
       ) : null}
 
       {state.status === "empty" ? (
-        <p className="text-body text-text-secondary">
-          No active check-in question set is configured for this organization yet.
-        </p>
+        <EmptyState
+          title="No active check-in question set"
+          description="Nothing is configured for this organization yet, so Kayla is not asking new hires anything at a milestone. Kayla Ops sets the first question set up with you — there is nothing to do here in the meantime."
+        />
       ) : null}
 
       {state.status === "loaded" ? (
@@ -168,11 +163,12 @@ export default function CheckInQuestionsPage() {
             }`}
           </p>
           {state.questions.length === 0 ? (
-            <p className="text-body text-text-secondary">
-              This question set has no questions configured.
-            </p>
+            <EmptyState
+              title="This question set has no questions"
+              description="The set is active but empty, so no milestone check-in will ask anything. Kayla Ops can add questions to it."
+            />
           ) : (
-            <ul aria-label="Check-in questions" className="flex list-none flex-col gap-16 p-0">
+            <ul aria-label="Check-in questions" className="flex list-none flex-col gap-16 p-[0]">
               {state.questions.map((question, index) => (
                 <CheckinQuestionCard key={question.id} question={question} position={index + 1} />
               ))}

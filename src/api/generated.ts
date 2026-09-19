@@ -15,7 +15,9 @@ export interface paths {
         put?: never;
         /**
          * Sign in with an email address and password
-         * @description Returns a 15-minute access token and a 7-day rotating refresh token (`Q-11`). The token's audience follows the account's role: worker accounts receive a worker token and dashboard roles a dashboard token, so a credential is only ever usable on its own application (agents.md §6.2 layer 1). Every failure — unknown organisation, unknown address, no password set, wrong password — is the same status, body and timing.
+         * @description Returns a 15-minute access token and a 7-day rotating refresh token (`Q-11`). The token's audience follows the account's role: worker accounts receive a worker token and dashboard roles a dashboard token, so a credential is only ever usable on its own application (agents.md §6.2 layer 1).
+         *
+         *     `org_id` is **optional**. Omit it and the server resolves the organisation from the address; send it (the dashboard's invitation links still do) and only that organisation is searched. Every failure — unknown organisation, unknown address, an address held by more than one organisation, no password set, wrong password — is the same status, body and timing.
          */
         post: operations["login_auth_login_post"];
         delete?: never;
@@ -36,6 +38,8 @@ export interface paths {
         /**
          * Sign out of this device
          * @description Denies the presented access token for its remaining life (a Valkey entry whose TTL is exactly that remaining life) and revokes the refresh family it belongs to. Other devices keep their sessions; a password reset is what signs every device out.
+         *
+         *     For a browser, this also expires the dashboard's refresh cookie. `refresh_token` stays optional and the dashboard still does not send one — it has never been able to read the cookie — so the family it names is revoked only for a client that holds the token itself, such as the mobile app.
          */
         post: operations["logout_auth_logout_post"];
         delete?: never;
@@ -53,10 +57,50 @@ export interface paths {
         };
         /**
          * The signed-in account
-         * @description The caller's own row, read inside their own tenant scope. Carries no organisation identifier: a client that needs one reads the `org_id` claim of its own token. For a `worker` caller, also carries the roster-drawn `first_name`/`last_name`/`day_in_journey` (agents.md §10.4) — Today and Profile have no other source for a worker's name. Always null for every other role.
+         * @description The caller's own row, read inside their own tenant scope. Carries no organisation identifier: a client that needs one reads the `org_id` claim of its own token. It does carry `org_name`, the organisation's **display name** — a string nothing accepts, filters on or treats as unique, so the dashboard sidebar can show the customer's own name instead of the product's without any client ever holding a tenant key. For a `worker` caller, also carries the roster-drawn `first_name`/`last_name`/`day_in_journey` (agents.md §10.4) — Today and Profile have no other source for a worker's name. Always null for every other role.
          */
         get: operations["me_auth_me_get"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/me/notification-preferences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change which channels this worker wants notifications on
+         * @description Worker-only. Replaces the caller's whole `notification_preferences` — the same field `POST /auth/signup/set-password` captures once at signup (`Q-27`) and `GET /auth/me` returns read-only — with exactly what is submitted here; this is not merged with what was there before. An empty list is valid and deliberate: it means every channel is off, and `kayla.notifications.dispatch.notify_user` already treats that exactly like `null`, a silent no-op rather than a default to email (`Q-33`).
+         */
+        patch: operations["set_notification_preferences_auth_me_notification_preferences_patch"];
+        trace?: never;
+    };
+    "/auth/me/push-token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Register this device's Expo push token
+         * @description Worker-only. Persists the token `expo-notifications`' `getExpoPushTokenAsync()` returned on this device, so `kayla.notifications.dispatch.notify_user` has somewhere to deliver a push notification (`Q-27`). There is exactly one token per account: calling this again overwrites whatever was stored before, which is what the app should do on every fresh token (a new install, a token rotation), not only the first one.
+         */
+        put: operations["set_push_token_auth_me_push_token_put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -96,6 +140,8 @@ export interface paths {
         /**
          * Ask for a password-reset link
          * @description Always `202` with the same body, whether or not the address has an account (`RAG.md` §12.3). The mail is handed to a background task, so the response does not wait on SMTP and its timing does not depend on whether one was produced. The link lands on `/auth/reset-password` on the application host and is redeemed by posting its token to `/auth/password-reset/confirm`.
+         *
+         *     `org_id` is **optional**. Omit it — the worker app always does, since it carries no tenant identifier at all and a signed-out person has no token to read one from — and the server resolves the organisation from the address. Unlike `/auth/login`, an address no organisation holds and an address more than one organisation holds are **not** refused here: both produce this same `202` and send nothing, because the constant response is the contract.
          */
         post: operations["request_password_reset_auth_password_reset_request_post"];
         delete?: never;
@@ -118,6 +164,30 @@ export interface paths {
          * @description One-time-use. The presented token is consumed and a successor is issued into the same family. Presenting an **already-consumed** token means a copy exists: the entire family is revoked, every access token for the account is denied, and both parties must sign in again (OAuth 2.0 Security BCP §4.13.2). Clients must branch on `refresh_token_reused` rather than treating it as an ordinary expiry.
          */
         post: operations["refresh_auth_refresh_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restore a dashboard session from its cookie
+         * @description **Browser dashboard only.** Takes the `HttpOnly`, `SameSite=Strict` refresh cookie that `POST /auth/login` and `POST /orgs/signup/complete` set, and answers with a fresh 15-minute access token and the account it belongs to — **never a refresh token**. There is no request body: the credential is the cookie, and the browser attaches it because the call is made with `credentials: "include"`.
+         *
+         *     This is what lets a page reload keep a session that otherwise lives only in memory. It is deliberately not `POST /auth/refresh` with a cookie bolted on: that endpoint returns a refresh token in its body, and `HttpOnly` prevents a script *reading* a cookie but not *spending* one, so a cookie-authenticated endpoint answering with a durable credential would hand any cross-site-scripting flaw seven days of offline access. Rotation still happens — the presented token is consumed and its successor is written straight back into a new cookie — so reuse detection is unchanged: a replayed cookie revokes the whole family and signs the account out.
+         *
+         *     A session whose role belongs to the worker app is refused with `token_audience_mismatch` and the cookie is cleared. That should be unreachable: the cookie is only ever set for dashboard roles.
+         */
+        post: operations["restore_session_auth_session_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -216,6 +286,8 @@ export interface paths {
         /**
          * Ask for an address-verification link
          * @description Always `202` with the same body, whether the address is unknown, already verified, or about to receive a link. The link lands on `/auth/verify-email` on the application host and is redeemed by posting its token to `/auth/verify-email/confirm`.
+         *
+         *     `org_id` is **optional**, exactly as it is on `/auth/password-reset/request` and for the same reasons: omit it and the server resolves the organisation from the address, and an unknown or ambiguous address produces this same `202` rather than a refusal.
          */
         post: operations["request_email_verification_auth_verify_email_request_post"];
         delete?: never;
@@ -275,9 +347,29 @@ export interface paths {
         put?: never;
         /**
          * Record one check-in answer
-         * @description The one shared write path for every worker-facing check-in surface (agents.md §10.9 task 5): shift-end mood, a milestone construct or `other_concerns` answer, or the Day-Zero-to-Day-1 note. For `flow=milestone_checkin`, `question_key`/`milestone_day` are resolved against this org's currently active question set — an unknown pairing is a 404, not a silently-accepted write.
+         * @description The one shared write path for every worker-facing check-in surface (agents.md §10.9 task 5): shift-end mood, a milestone construct or `other_concerns` answer, or the Day-Zero-to-Day-1 note. For `flow=milestone_checkin`, `question_key`/`milestone_day` are resolved against this org's currently active question set — an unknown pairing is a 404, not a silently-accepted write. `proactive_care_suggested` in the response is `true` exactly when this answer is the worker's exact Nth lifetime low `mood` response (agents.md §10.11 task 9, Q-31; N is this org's configured, per-org threshold).
          */
         post: operations["record_checkin_response_checkins_responses_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/checkins/shift/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start my shift — one encouraging message, no response required
+         * @description Worker-only. Sends Kayla's one, fixed, canned greeting synchronously — no LLM call, no retrieval — as a system-initiated assistant chat message with no matching user turn. This is **not** a check-in: it never touches `checkin_responses`, and there is nothing to answer (agents.md §10.10 task 1; MVP-SPEC §2.5.4). It is never framed as a work-hours, scheduling, or wage record of any kind. The request body is entirely optional — every field it declares has its own default, so a caller may POST with no body at all.
+         */
+        post: operations["start_shift_checkins_shift_start_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -356,6 +448,210 @@ export interface paths {
          * @description Name, email, start date, site and job title for every worker in this cohort — never anything from `users`/auth beyond whether a login has been matched, and never a mood, chat, or Care value (agents.md §10.3 task 7).
          */
         get: operations["get_cohort_cohorts__cohort_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/dashboard/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List this organisation's nudges
+         * @description Every nudge for the caller's org, most recent first — draft/pending/approved/dismissed/sent (agents.md §10.12). Every field is site-scoped; none names an individual worker.
+         */
+        get: operations["list_actions_dashboard_actions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/dashboard/actions/{nudge_id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve a pending nudge
+         * @description pending -> approved only (agents.md §10.12, Q-48). No request body: HR approves the AI-drafted text as written — this phase builds no editing surface.
+         */
+        post: operations["approve_action_dashboard_actions__nudge_id__approve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/dashboard/actions/{nudge_id}/dismiss": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dismiss a draft or pending nudge
+         * @description {draft, pending} -> dismissed only (agents.md §10.12, Q-48). Terminal; no undo.
+         */
+        post: operations["dismiss_action_dashboard_actions__nudge_id__dismiss_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/dashboard/engagement": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Milestone completion trend
+         * @description The org's current cohort, milestone-day completion trend (days 7/30/60/90), plus a comparison line — a real previous cohort's own trend when one exists, otherwise an explicitly-labelled illustrative shape (agents.md §10.11 task 8, Q-35: keep).
+         */
+        get: operations["get_engagement_route_dashboard_engagement_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/dashboard/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Org-wide Overview tiles
+         * @description New hires enrolled, % signed up, check-in completion, on track, a coarse adjustment-signals summary, and time saved (agents.md §10.11 task 7). 'How you compare' (Q-40) is deliberately absent. Every suppressible field carries `suppressed`/`status_label` alongside it — colour is never the only signal (task 5).
+         */
+        get: operations["get_overview_route_dashboard_overview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/dashboard/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read this organisation's Settings thresholds
+         * @description The four `org_settings` columns (agents.md §10.11 task 10): the Signals/Overview min-N suppression floor, the two traffic-light thresholds, and the proactive-Care low-mood count. An org that has never written a row gets the spec defaults back (`has_custom_settings=false`), never a 404.
+         */
+        get: operations["get_org_settings_dashboard_settings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update this organisation's Settings thresholds
+         * @description Partial update — every field is optional and an omitted one is left unchanged. `signal_threshold_amber` must end up lower than `signal_threshold_green` after the patch is merged with whatever this org already has; violating that, or any field's own bound, is a 422 in the §8.2 envelope.
+         */
+        patch: operations["update_org_settings_dashboard_settings_patch"];
+        trace?: never;
+    };
+    "/dashboard/settings/admin-users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List who holds hr_admin or org_owner in this organisation
+         * @description Read-only (agents.md §10.11 task 10). Every `users` row in the caller's organisation whose role is `hr_admin` or `org_owner`, ordered by role then email. No account-management write surface exists yet — this phase only asks for the listing.
+         */
+        get: operations["list_admin_users_dashboard_settings_admin_users_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/dashboard/settings/cost-of-turnover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The cost-of-turnover reference card
+         * @description `Q-52`: the reference card survives Settings even though its old interactive-calculator page is cut (agents.md §13.1, §13.5 trap 1). Fixed content — a formula explanation and one worked example ported from the demo's own illustrative starting figures, not a computation over this org's data or any request input.
+         */
+        get: operations["get_cost_of_turnover_reference_dashboard_settings_cost_of_turnover_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/dashboard/settings/privacy-disclosure": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The min-N privacy guarantee, worded for this organisation's actual threshold
+         * @description Static, versioned copy (agents.md §10.11 task 10) naming this org's real `min_n_threshold` — never a hardcoded 4, since that column is per-org configurable (§9.1 Conflict 1). Reads the same settings `GET /dashboard/settings` does, so the number here and the number there never disagree.
+         */
+        get: operations["get_privacy_disclosure_dashboard_settings_privacy_disclosure_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/dashboard/signals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Adjustment signals, per cohort
+         * @description The five scored constructs for every cohort in scope — every cohort in the org when `cohort_id` is omitted, or exactly the named cohort otherwise (agents.md §10.11 tasks 1-3). A suppressed row still carries a status label; it never carries a value or a band.
+         */
+        get: operations["get_signals_route_dashboard_signals_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -501,6 +797,72 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/orgs/signup/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Choose a password and create the organisation
+         * @description Validates `org_signup_token` from `/orgs/signup/verify` (single-use, ~15 minutes), then creates the organisation, its first user as `org_owner` with the address already marked verified, and its settings row at the spec defaults — all in one transaction, so a half-built tenant cannot exist. Returns a real access/refresh pair identical in shape to `/auth/login`'s, so the browser moves straight into the dashboard with no second sign-in.
+         *
+         *     Single-use by construction: the pending signup row is deleted in the same transaction that creates the organisation, so a replayed token finds nothing and returns `verification_token_consumed`. A password that fails the policy returns `password_too_weak` with the machine-readable problems and **leaves the token usable**.
+         */
+        post: operations["complete_org_signup_orgs_signup_complete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/orgs/signup/request": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start creating an organisation with a work email address
+         * @description Always `202` with the same body — for a brand-new address, for one that already has an account, and for one whose domain another organisation already uses. No lookup of any kind runs at this step, so there is nothing about the input for the response to vary on: a caller cannot learn whether a company already uses Kayla Health by asking. A link lands at `/signup/verify` on the application host and is redeemed by posting its token to `/orgs/signup/verify`; the same token is also printed in the message as a copyable code, because the link and the signup may be on different devices.
+         *
+         *     The one input that *is* refused is an address on a free or disposable email provider (`business_email_required`, `422`). That is a product rule about who may open a tenant, not a security control, and it is applied to this flow alone.
+         */
+        post: operations["request_org_signup_orgs_signup_request_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/orgs/signup/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirm the work address and get a token for the final step
+         * @description Single-use, 24 hours. Consumes the emailed token and returns a short-lived (~15 minute) signed token plus the organisation name, work email and full name that were submitted at step one — so the final screen can identify the signup even when the link is opened on a different device from the one the form was filled in on. Redeeming a link twice returns `verification_token_consumed` rather than a second success, so a double-clicked link reads as what it is.
+         *
+         *     No organisation is created by this step and none exists yet; there is no id in this response because there is nothing to have an id.
+         */
+        post: operations["verify_org_signup_orgs_signup_verify_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/rosters/confirm": {
         parameters: {
             query?: never;
@@ -603,8 +965,135 @@ export interface components {
             version: number;
         };
         /**
+         * ActiveUsageTile
+         * @description Overview's **adoption-funnel third leg** — `overview_org_summary()`'s own
+         *     `active_headcount`, `active_window_days` and `active_rate` (`alembic/versions/
+         *     0018_overview_active_headcount.py`).
+         *
+         *     The funnel is `enrolled_headcount` (invited to the roster) -> `signed_up_headcount` (created an
+         *     account) -> `active_headcount` (used the product inside the trailing window). All three are
+         *     headcounts and none of them is ever suppressed; the funnel is monotonic by construction at the
+         *     SQL layer, so `active_headcount <= signed_up_headcount <= enrolled_headcount` always holds.
+         *
+         *     **Aggregate-only, structurally.** This tile is one integer, one window length and one
+         *     org-wide fraction. There is no worker id, name, cohort split, time bucket or content anywhere
+         *     in it, and the function behind it returns none either — "active" is a count of people, never a
+         *     list of them, and never attributable to a person. Care usage and crisis events are not part of
+         *     "active" and remain unreachable from the dashboard entirely (agents.md §6.2-6.3).
+         */
+        ActiveUsageTile: {
+            /**
+             * Active Headcount
+             * @description Distinct workers on this org's roster with any check-in response or any worker-authored chat turn inside the trailing window. A headcount: never suppressed, so `0` for an org with no activity — never `null`.
+             */
+            active_headcount: number;
+            /**
+             * Rate
+             * @description `active_headcount / signed_up_headcount`, a 0-1 fraction. A per-person rate, so unlike the headcount above it IS suppressed: `null` when `suppressed` is true (below the org's own `min_n_threshold`, or no signed-up denominator at all).
+             */
+            rate: number | null;
+            /** Status Label */
+            status_label: string;
+            /** Suppressed */
+            suppressed: boolean;
+            /**
+             * Window Days
+             * @description The trailing window `active_headcount` covers, in days — served from the SQL function rather than hardcoded here, so a label reading 'active in the last N days' cannot drift from the number it describes.
+             */
+            window_days: number;
+        };
+        /**
+         * AdjustmentSignalDot
+         * @description One construct's Overview-grain summary — **dot-only, no percentage** (deliberately coarser
+         *     than `ConstructSignal` above): the demo's own `OverviewSignalsTile` shows "status dots only,
+         *     no percentages... a viewer gets the five constructs' direction at a glance and still has a
+         *     reason to click through to the full Adjustment Signals view for the numbers." `respondent_
+         *     count` is summed across every cohort in the org (a headcount, never suppressed); `band`
+         *     reflects the single largest cohort among those that clear their own `min_n_threshold` for this
+         *     construct — never a number averaged across cohorts, which would re-derive suppression math
+         *     this package does not own (see `kayla.dashboard.service` for the exact rule).
+         */
+        AdjustmentSignalDot: {
+            /** Band */
+            band: ("green" | "amber" | "red") | null;
+            /** Construct Id */
+            construct_id: string;
+            /**
+             * Respondent Count
+             * @description Summed across every cohort in the org.
+             */
+            respondent_count: number;
+            /** Status Label */
+            status_label: string;
+            /** Suppressed */
+            suppressed: boolean;
+        };
+        /**
+         * AdjustmentSignalsTile
+         * @description Overview's fourth KPI tile: the five constructs, coarse grain. Same content as the Signals
+         *     page, one dot each — `alembic/versions/0015_signals_views.py`'s own cross-reference.
+         */
+        AdjustmentSignalsTile: {
+            /** Constructs */
+            constructs: components["schemas"]["AdjustmentSignalDot"][];
+        };
+        /**
+         * AdminUserSummary
+         * @description One row of `GET /dashboard/settings/admin-users` — read-only, per agents.md §10.11 task
+         *     10's "a way to list which users in the org hold hr_admin/org_owner roles"; this phase builds
+         *     no write surface for account management.
+         *
+         *     Carries only `users` columns that already exist for every account regardless of role — nothing
+         *     roster-drawn (`first_name`/`last_name` live on `roster_entries`, matched only for `worker`
+         *     logins; an HR admin or org owner is not necessarily a roster entry at all).
+         */
+        AdminUserSummary: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Email */
+            email: string;
+            /** Email Verified */
+            email_verified: boolean;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Last Login At
+             * @description The account's previous successful sign-in, or null.
+             */
+            last_login_at?: string | null;
+            /** @description Always `hr_admin` or `org_owner` — the two admin roles. */
+            role: components["schemas"]["UserRole"];
+        };
+        /**
          * AuthenticatedUser
-         * @description The caller's own account. Carries no tenant identifier — see the module docstring.
+         * @description The caller's own account. Carries no tenant **identifier** — see the module docstring.
+         *
+         *     That rule is unchanged and `org_name` is not a hole in it, because a display name and a tenant
+         *     key are different objects that happen to be about the same thing:
+         *
+         *     * A tenant **key** (`org_id`) is *presentable*. It is what an RLS policy compares against, what
+         *       `?org=<uuid>` puts in a URL, and what a request body could carry to select which rows a query
+         *       may see. Echoing one back invites a client to start sending it, and a client that sends a
+         *       tenant key is a client whose tenant is decided by something other than a signature (§6.2
+         *       layer 1). There is still no `org_id` anywhere in this class, and there must not be.
+         *     * A display **name** (`org_name`) is *inert*. There is no endpoint that accepts it, no query
+         *       that filters on it, and no uniqueness to it — two customers may be called "Sunrise Home Care"
+         *       and the product works. It cannot select a tenant because nothing reads it as a selector.
+         *
+         *     It exists because the dashboard sidebar otherwise shows the product's own name where the
+         *     customer's should be: the client has no way at all to learn who it is signed in as, since the
+         *     one thing it holds — its access token's `org_id` claim — is an opaque uuid it cannot resolve to
+         *     a name without an endpoint that does it. This is that endpoint, returning the strictly weaker
+         *     of the two values. Populated for `GET /auth/me` and for the `SessionResponse` that
+         *     `POST /orgs/signup/complete` returns (that request *created* the organisation, so the name is
+         *     already in hand); `null` on `login`, `refresh` and `signup/set-password`, which do not perform
+         *     the read.
          *
          *     `first_name`/`last_name`/`day_in_journey` are populated only for a `GET /auth/me` call made by
          *     a `worker` (agents.md §10.4: Today/Profile have no other source for a worker's name). They are
@@ -651,6 +1140,11 @@ export interface components {
              * @description Channels (push/email/text) captured at POST /auth/signup/set-password. Worker callers only; null until set, and never modified anywhere else in this build.
              */
             notification_preferences?: string[] | null;
+            /**
+             * Org Name
+             * @description The display name of the organisation this account belongs to, for the dashboard sidebar and anywhere else the customer should see their own name instead of the product's. A **display string, never an identifier**: no endpoint accepts it, nothing filters on it, and it is not unique. Populated by GET /auth/me and by POST /orgs/signup/complete; null on login, refresh and signup/set-password.
+             */
+            org_name?: string | null;
             /** @description One of the six roles of agents.md §6.1. */
             role: components["schemas"]["UserRole"];
             /**
@@ -698,6 +1192,37 @@ export interface components {
             locale: string;
         };
         /**
+         * CheckinCompletionTile
+         * @description Overview's "check-in completion" tile — `overview_org_summary()`'s own
+         *     `checkin_completion_rate` and the headcounts it is built from.
+         */
+        CheckinCompletionTile: {
+            /**
+             * Completed Checkins
+             * @description How many of those events have a response.
+             */
+            completed_checkins: number;
+            /**
+             * Rate
+             * @description `completed / required`, a 0-1 fraction. `null` when `suppressed`.
+             */
+            rate: number | null;
+            /**
+             * Required Checkins
+             * @description One event per (worker, elapsed milestone day).
+             */
+            required_checkins: number;
+            /**
+             * Respondent Headcount
+             * @description Signed-up workers with >=1 milestone due.
+             */
+            respondent_headcount: number;
+            /** Status Label */
+            status_label: string;
+            /** Suppressed */
+            suppressed: boolean;
+        };
+        /**
          * CheckinFlow
          * @description Which worker-facing surface produced this response — the persona/flow discriminator agents.md
          *     §10.9 task 4 asks for. P10 (agents.md §10.10, a later phase) is what actually populates
@@ -741,6 +1266,12 @@ export interface components {
             milestone_day: number | null;
             /** Numeric Value */
             numeric_value: number | null;
+            /**
+             * Proactive Care Suggested
+             * @description True exactly when this response is the worker's exact Nth lifetime low `mood` answer (N = this org's configured `org_settings.proactive_care_low_mood_count`, default 2) — agents.md §10.11 task 9, Q-31. Always present and `false` for every other response, including every milestone `scale`/`free_text` answer and every mood answer that is not exactly the Nth low one.
+             * @default false
+             */
+            proactive_care_suggested: boolean;
             /** Question Key */
             question_key: string;
             /**
@@ -884,6 +1415,21 @@ export interface components {
             start_date: string | null;
         };
         /**
+         * CohortSignals
+         * @description All five constructs for one cohort.
+         */
+        CohortSignals: {
+            /**
+             * Cohort Id
+             * Format: uuid
+             */
+            cohort_id: string;
+            /** Cohort Label */
+            cohort_label: string;
+            /** Constructs */
+            constructs: components["schemas"]["ConstructSignal"][];
+        };
+        /**
          * CohortSummary
          * @description One row of `GET /cohorts`.
          */
@@ -946,6 +1492,126 @@ export interface components {
             start_date?: string | null;
         };
         /**
+         * ComparisonTrendPoint
+         * @description One milestone day of the comparison line — real or illustrative (see `EngagementResponse.
+         *     comparison_mode`). Deliberately lighter than `MilestoneTrendPoint`: no headcounts, so an
+         *     illustrative, fabricated point can never be mistaken for a real one carrying real counts.
+         */
+        ComparisonTrendPoint: {
+            /**
+             * Completion Pct
+             * @description A 0-1 fraction: real and suppression-aware when comparison_mode is 'real_previous_cohort'; a fixed illustrative fraction when 'illustrative_previous_cohort'; always `null` when 'no_comparison_data'.
+             */
+            completion_pct: number | null;
+            /** Milestone Day */
+            milestone_day: number;
+        };
+        /**
+         * ConstructSignal
+         * @description One of the five `ConstructId` rows for one cohort — `signals_construct_summary()`'s own
+         *     grain, reshaped. `construct_id` is always one of the five `kayla.checkin.constructs.
+         *     ConstructId` values, in that enum's declaration order; `other_concerns` never appears here
+         *     (excluded at the SQL layer, `alembic/versions/0015_signals_views.py`'s own guarantee).
+         */
+        ConstructSignal: {
+            /**
+             * Band
+             * @description `null` when `suppressed` is true. Never a 'neutral' placeholder band.
+             */
+            band: ("green" | "amber" | "red") | null;
+            /**
+             * Construct Id
+             * @description One of the five scored constructs. Never 'other_concerns'.
+             */
+            construct_id: string;
+            /**
+             * Respondent Count
+             * @description A headcount, never suppressed — 0 when nobody in this cohort has answered yet.
+             */
+            respondent_count: number;
+            /**
+             * Status Label
+             * @description Always present, suppressed or not — 'On track' / 'Watch' / 'Needs attention' for a real band, or a suppression sentence otherwise. Colour is never the only signal (agents.md §10.11 task 5).
+             */
+            status_label: string;
+            /**
+             * Suppressed
+             * @description True below the org's own `min_n_threshold`.
+             */
+            suppressed: boolean;
+            /**
+             * Value
+             * @description 0-100 average (the construct's own scale — NOT a 0-1 fraction, unlike every rate field elsewhere on this page). `null` when `suppressed` is true — never a value with no band.
+             */
+            value: number | null;
+        };
+        /**
+         * CostOfTurnoverExample
+         * @description The illustrative figures `kb/kaylahealth-demo/components/dashboard/turnover/
+         *     RoiCalculator.tsx` ships as its four starting input values, plus that same component's own
+         *     formula applied to them — ported as a fixed worked example, not a live computation over
+         *     anything this org actually reports.
+         */
+        CostOfTurnoverExample: {
+            /**
+             * Additional Hires Retained
+             * @description round(new_hires_per_year * turnover_rate% * reduction%) — the demo's own `hiresRetained` formula.
+             */
+            additional_hires_retained: number;
+            /**
+             * Average Replacement Cost Usd
+             * @description Demo default: `replacementCost`.
+             */
+            average_replacement_cost_usd: number;
+            /**
+             * Estimated Annual Savings Usd
+             * @description additional_hires_retained * average_replacement_cost_usd — the demo's own `savings` formula.
+             */
+            estimated_annual_savings_usd: number;
+            /**
+             * Estimated Reduction Percent
+             * @description Demo default: `reduction`.
+             */
+            estimated_reduction_percent: number;
+            /**
+             * First 90 Day Turnover Rate Percent
+             * @description Demo default: `turnoverRate`.
+             */
+            first_90_day_turnover_rate_percent: number;
+            /**
+             * New Hires Per Year
+             * @description Demo default: `newHires`.
+             */
+            new_hires_per_year: number;
+        };
+        /**
+         * CostOfTurnoverReferenceCard
+         * @description `GET /dashboard/settings/cost-of-turnover` — `Q-52`'s reference card. Fixed content only:
+         *     no request body, no per-org inputs, no computed answer over anything but the worked example
+         *     below. See the module docstring for why this is deliberately not the interactive calculator
+         *     agents.md §13.1 cuts (the `[REMOVE]`d `/dashboard/turnover-calculator` page).
+         */
+        CostOfTurnoverReferenceCard: {
+            /**
+             * Description
+             * @description What the formula estimates and why (demo `roi.subtitle` / `turnoverCalculator.whatBody`, condensed).
+             */
+            description: string;
+            /**
+             * Disclaimer
+             * @description Demo `roi.disclaimer`, verbatim.
+             */
+            disclaimer: string;
+            example: components["schemas"]["CostOfTurnoverExample"];
+            /**
+             * Formula
+             * @description The two-step formula in words, ported from `RoiCalculator.tsx`'s own arithmetic.
+             */
+            formula: string;
+            /** Title */
+            title: string;
+        };
+        /**
          * CrisisMessageResponse
          * @description A Stage 0 crisis was detected. `message` is the fixed, reviewed, bilingual 988 copy —
          *
@@ -982,6 +1648,14 @@ export interface components {
         /**
          * EmailVerificationRequest
          * @description `POST /auth/verify-email/request`. Always answered identically.
+         *
+         *     `org_id` is **optional**, for exactly the reasons `PasswordResetRequest` immediately above
+         *     states — this endpoint had the identical unreachable-from-mobile problem, has the identical
+         *     constant-response contract, and now takes the identical server-side resolution. It is not made
+         *     more abusable by the change: `POST /auth/signup/request` already accepts a bare address with no
+         *     organisation at all and mails something unconditionally (agents.md §9.1 Conflict 3), so
+         *     "persuade Kayla to send mail to an address I chose" was never gated on knowing a v4 uuid, and
+         *     the per-address and per-source limiters that pay for that endpoint pay for this one too.
          */
         EmailVerificationRequest: {
             /**
@@ -992,10 +1666,9 @@ export interface components {
             email: string;
             /**
              * Org Id
-             * Format: uuid
-             * @description The organisation this account belongs to. Client state established at signup or from an invitation link, not something a person types — see the module docstring for why authentication cannot resolve it from the address alone.
+             * @description The organisation the account belongs to. **Optional.** Omit it — the mobile app always does, since it holds no tenant identifier by design and a signed-out person has no token to read one from — and the server resolves it from the address. The response is `202` with the same body either way, and stays `202` with the same body when no organisation holds an account at the address and when more than one does: there is no spelling of this field, present or absent, right or wrong, that tells a caller anything about whether an account exists.
              */
-            org_id: string;
+            org_id?: string | null;
         };
         /**
          * EmailVerified
@@ -1008,6 +1681,55 @@ export interface components {
              * @constant
              */
             status: "email_verified";
+        };
+        /**
+         * EngagementResponse
+         * @description `GET /dashboard/engagement` (agents.md §10.11 task 8, Q-35: "keep").
+         *
+         *     `current_trend` is always the org's single **current** cohort — the most recently started
+         *     cohort with at least one milestone check-in due — never a cross-cohort rollup (see
+         *     `kayla.dashboard.service` for the exact selection rule). The comparison line is real previous-
+         *     cohort data when the org has one to show, and an explicitly-labelled illustrative shape only
+         *     when it does not (ported from `kb/kaylahealth-demo/lib/mock/engagement.ts`'s own "the org has
+         *     no completed cohort to compare against yet" framing) — `comparison_mode` is what lets
+         *     `kayla-frontend` render the correct disclaimer for whichever case applies.
+         */
+        EngagementResponse: {
+            /**
+             * Comparison Cohort Id
+             * @description Present only when `comparison_mode == 'real_previous_cohort'`.
+             */
+            comparison_cohort_id: string | null;
+            /** Comparison Cohort Label */
+            comparison_cohort_label?: string | null;
+            /**
+             * Comparison Disclaimer
+             * @description Human-readable caveat text. Present whenever `comparison_mode` is not 'real_previous_cohort' — `null` only for a genuine previous-cohort comparison.
+             */
+            comparison_disclaimer: string | null;
+            /**
+             * Comparison Mode
+             * @description 'real_previous_cohort' — a genuine, earlier completed-or-in-progress cohort exists; 'illustrative_previous_cohort' — no real history, the line below is a fabricated shape; 'no_comparison_data' — the org has no current cohort at all yet.
+             * @enum {string}
+             */
+            comparison_mode: "real_previous_cohort" | "illustrative_previous_cohort" | "no_comparison_data";
+            /**
+             * Comparison Trend
+             * @description Always exactly 4 points when comparison_mode != 'no_comparison_data', else empty.
+             */
+            comparison_trend: components["schemas"]["ComparisonTrendPoint"][];
+            /**
+             * Current Cohort Id
+             * @description `null` only when the org has no cohort with any milestone check-in due yet.
+             */
+            current_cohort_id: string | null;
+            /** Current Cohort Label */
+            current_cohort_label?: string | null;
+            /**
+             * Current Trend
+             * @description Always exactly 4 points (days 7/30/60/90), zero-filled when a day has nobody due.
+             */
+            current_trend: components["schemas"]["MilestoneTrendPoint"][];
         };
         /**
          * Environment
@@ -1279,6 +2001,10 @@ export interface components {
         /**
          * LoginRequest
          * @description `POST /auth/login`.
+         *
+         *     The one request body in this module whose `org_id` is **optional** — see the module docstring's
+         *     "why login now does not have to" section for the whole argument. Omit it and the server resolves
+         *     the tenant from the address; send it and nothing about the previous behaviour changes.
          */
         LoginRequest: {
             /**
@@ -1289,10 +2015,9 @@ export interface components {
             email: string;
             /**
              * Org Id
-             * Format: uuid
-             * @description The organisation this account belongs to. Client state established at signup or from an invitation link, not something a person types — see the module docstring for why authentication cannot resolve it from the address alone.
+             * @description The organisation to sign in to. **Optional.** Omit it and the server resolves it from the address; send it (the dashboard's invitation links still do, as `?org=<uuid>`) and only that organisation is searched. Omitting it is refused generically — the same status, code and body as a wrong password — when no organisation holds an account at the address, and also when more than one does: the server never guesses which tenant was meant. A person with accounts at two organisations signs in with this field set.
              */
-            org_id: string;
+            org_id?: string | null;
             /**
              * Password
              * @description The password, as typed. Never logged, never echoed, never stored.
@@ -1335,6 +2060,37 @@ export interface components {
             locale: string;
         };
         /**
+         * MilestoneTrendPoint
+         * @description One milestone day of the **current** cohort's real trend —
+         *     `engagement_milestone_completion()`'s own grain, one row per milestone day.
+         */
+        MilestoneTrendPoint: {
+            /**
+             * Completed Count
+             * @description Headcount who actually completed it. Never suppressed.
+             */
+            completed_count: number;
+            /**
+             * Completion Pct
+             * @description `completed / required`, a 0-1 fraction. `null` when `suppressed`.
+             */
+            completion_pct: number | null;
+            /**
+             * Milestone Day
+             * @description One of 7, 30, 60, 90.
+             */
+            milestone_day: number;
+            /**
+             * Required Count
+             * @description Headcount due by this milestone day. Never suppressed.
+             */
+            required_count: number;
+            /** Status Label */
+            status_label: string;
+            /** Suppressed */
+            suppressed: boolean;
+        };
+        /**
          * NotImplementedMessageResponse
          * @description No Stage 0 crisis was detected. P2 ships no chat and no retrieval, so this says so plainly
          *
@@ -1373,6 +2129,402 @@ export interface components {
          */
         NotificationChannel: "push" | "email" | "text";
         /**
+         * NotificationPreferencesUpdateRequest
+         * @description `PATCH /auth/me/notification-preferences` (agents.md §10.10 task 5, `Q-33`). Worker-only —
+         *     see the router. Whole-value replace, exactly like `PushTokenUpdateRequest` next to it: what is
+         *     submitted here becomes the caller's entire `notification_preferences` set, not a merge with
+         *     what was there before. Unlike that field on `SignupSetPasswordRequest`, this one is required
+         *     and never `None` — there is no "leave it alone" spelling for a `PATCH` whose only job is to
+         *     change this value, and an empty list already says "every channel off" on its own.
+         */
+        NotificationPreferencesUpdateRequest: {
+            /**
+             * Notification Preferences
+             * @description The full replacement set: push, email, text, any combination, or an empty list to turn every channel off. `kayla.notifications.dispatch.notify_user` already treats empty exactly like null — a silent no-op, never a default to email.
+             */
+            notification_preferences: components["schemas"]["NotificationChannel"][];
+        };
+        /**
+         * NotificationPreferencesUpdated
+         * @description The caller's `notification_preferences` was replaced with exactly this set.
+         *
+         *     Echoes the request back rather than re-reading the row: the router persists precisely
+         *     `notification_preferences` (already validated and deduplicated by
+         *     `NotificationPreferencesUpdateRequest`) in the same unit of work, so there is nothing a second
+         *     read would tell us that we do not already have in hand. Typed as `list[NotificationChannel]`
+         *     rather than `AuthenticatedUser.notification_preferences`'s looser `list[str] | None`: that field
+         *     reads a JSONB column that predates this endpoint and is not enum-constrained at rest (`Q-27`'s
+         *     signup capture, `kayla.db.models.NotificationChannel`'s own docstring), while this one only ever
+         *     echoes a value this request body just validated, so the stronger type costs nothing and is
+         *     never null — an empty list, not `None`, is how "every channel off" is spelled here.
+         */
+        NotificationPreferencesUpdated: {
+            /**
+             * Notification Preferences
+             * @description The full set now on file, deduplicated, in first-seen order.
+             */
+            notification_preferences: components["schemas"]["NotificationChannel"][];
+        };
+        /**
+         * NudgeResponse
+         * @description One nudge, exactly as HR sees it on the Actions page.
+         *
+         *     `site_id`/`site_name` are the only targeting information this response ever carries (`Q-50`:
+         *     targeting is site-only — see `kayla.nudges.models`'s own module docstring). There is no
+         *     `manager_id`/`manager_name` field because there is no such column to read.
+         */
+        NudgeResponse: {
+            /**
+             * Approved At
+             * @description Null until approved.
+             */
+            approved_at?: string | null;
+            /**
+             * Approved By User Id
+             * @description Set once approved (an hr_admin/org_owner account); null until.
+             */
+            approved_by_user_id?: string | null;
+            /**
+             * Construct Id
+             * @description One of the five scored constructs (kayla.checkin.constructs.ConstructId).
+             */
+            construct_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Dismissed At
+             * @description Null unless dismissed.
+             */
+            dismissed_at?: string | null;
+            /**
+             * Drafted Body
+             * @description The AI-drafted nudge text. HR approves or dismisses it as written — this phase builds no editing surface (Q-48).
+             */
+            drafted_body: string;
+            /**
+             * Drafted Title
+             * @description The AI-drafted nudge headline.
+             */
+            drafted_title: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Sent At
+             * @description Set once the state machine reaches 'sent' — this alone does not mean anything was delivered externally; see kayla.settings.Settings.nudge_external_delivery_enabled (Q-49, defaulted off).
+             */
+            sent_at?: string | null;
+            /**
+             * Site Id
+             * Format: uuid
+             */
+            site_id: string;
+            /**
+             * Site Name
+             * @description The targeted site's display name.
+             */
+            site_name: string;
+            /** @description draft | pending | approved | dismissed | sent — see kayla.nudges.models.NudgeStatus for the full state machine. */
+            status: components["schemas"]["NudgeStatus"];
+            /**
+             * Triggering Signal Summary
+             * @description A site-and-construct-level snapshot only, e.g. 'workload band=red, n=12' — never an individual worker's data.
+             */
+            triggering_signal_summary: string;
+        };
+        /**
+         * NudgeStatus
+         * @description The state machine `Q-48`'s resolved reading fixes: `draft -> pending -> approved -> sent`,
+         *     plus the `dismissed` terminal state for HR declining a draft (agents.md §10.12).
+         *
+         *     A genuinely closed, structural vocabulary this schema itself closes over — the identical
+         *     reasoning `kayla.chat.models.ChatMessageRole`/`kayla.checkin.models.CheckinFlow` give for being
+         *     real, database-enforced native enums rather than plain strings (contrast `kayla.nudges.models.
+         *     CONSTRUCT_ID_MAX_LENGTH`'s own docstring, immediately above, for why *that* column is the other
+         *     shape). `kayla.nudges.service` is the one place that enforces which transitions between these
+         *     five values are legal; the database only enforces that the column can never hold a sixth value.
+         * @enum {string}
+         */
+        NudgeStatus: "draft" | "pending" | "approved" | "dismissed" | "sent";
+        /**
+         * OnTrackTile
+         * @description Overview's "on track" tile. **A documented proxy, not real attendance/timeclock data** —
+         *     `shift_checkin_days / working_days_elapsed`, see `alembic/versions/0015_signals_views.py`'s
+         *     own "On track" section for the two biases this figure inherits. Never call this a timeclock
+         *     or attendance figure anywhere downstream (P10's own
+         *     `test_ft_shift_checkin_never_a_timeclock.py`).
+         */
+        OnTrackTile: {
+            /**
+             * Population Headcount
+             * @description Signed-up workers with a start date in the past.
+             */
+            population_headcount: number;
+            /**
+             * Rate
+             * @description `shift_checkin_days / working_days_elapsed`, a 0-1 fraction capped at 1.0. `null` when `suppressed`.
+             */
+            rate: number | null;
+            /**
+             * Shift Checkin Days
+             * @description Distinct calendar days with >=1 shift-end check-in, summed across the population.
+             */
+            shift_checkin_days: number;
+            /** Status Label */
+            status_label: string;
+            /** Suppressed */
+            suppressed: boolean;
+            /**
+             * Working Days Elapsed
+             * @description Calendar days since start_date, summed across the population. Weekends included.
+             */
+            working_days_elapsed: number;
+        };
+        /**
+         * OrgSettingsResponse
+         * @description `GET`/`PATCH /dashboard/settings`'s shared response — the four `org_settings` columns.
+         *
+         *     `has_custom_settings=False` means this org has never written a row: every value below is the
+         *     column default (`kayla.org_settings.models.DEFAULT_*`), computed on the fly rather than
+         *     persisted, exactly like every P11 aggregation function's own `LEFT JOIN ... COALESCE` already
+         *     treats a missing row — fail safe to the spec defaults, never an error and never an empty screen.
+         *     `updated_at` is `null` in that same case, for the same reason.
+         */
+        OrgSettingsResponse: {
+            /**
+             * Has Custom Settings
+             * @description False when this org has never written a settings row — every value above is the column default, not a stored one.
+             */
+            has_custom_settings: boolean;
+            /**
+             * Min N Threshold
+             * @description Suppress a Signals/Overview rate below this many respondents (§9.1 Conflict 1).
+             */
+            min_n_threshold: number;
+            /**
+             * Org Id
+             * Format: uuid
+             */
+            org_id: string;
+            /**
+             * Proactive Care Low Mood Count
+             * @description Consecutive low-mood check-ins before the proactive Care suggestion (`Q-31`).
+             */
+            proactive_care_low_mood_count: number;
+            /**
+             * Signal Threshold Amber
+             * @description Traffic-light amber cutoff, inclusive; below this is red. Always < green.
+             */
+            signal_threshold_amber: number;
+            /**
+             * Signal Threshold Green
+             * @description Traffic-light green cutoff, inclusive, on the 0-100 construct scale (`Q-44`).
+             */
+            signal_threshold_green: number;
+            /**
+             * Updated At
+             * @description When this org's settings were last written. Null until the first write.
+             */
+            updated_at?: string | null;
+        };
+        /**
+         * OrgSettingsUpdateRequest
+         * @description `PATCH /dashboard/settings` — a partial update. Every field is optional; an omitted field
+         *     is left at whatever the org already has (or the default, for an org's first write).
+         *
+         *     Field-level bounds catch an obviously-wrong single value (a negative `min_n_threshold`, a
+         *     threshold outside 0-100); the green-must-exceed-amber rule cannot be checked here because a
+         *     caller may legitimately patch only one of the two — `kayla.org_settings.service.
+         *     OrgSettingsService.update` re-validates the **merged** result (this patch applied on top of the
+         *     org's current or default settings) and raises the same 422 envelope for that violation.
+         */
+        OrgSettingsUpdateRequest: {
+            /**
+             * Min N Threshold
+             * @description New suppression cutoff. Omit to leave unchanged.
+             */
+            min_n_threshold?: number | null;
+            /**
+             * Proactive Care Low Mood Count
+             * @description New proactive-Care low-mood count. Omit to leave unchanged.
+             */
+            proactive_care_low_mood_count?: number | null;
+            /**
+             * Signal Threshold Amber
+             * @description New amber cutoff (0-100); must end up less than the green cutoff. Omit to leave unchanged.
+             */
+            signal_threshold_amber?: number | null;
+            /**
+             * Signal Threshold Green
+             * @description New green cutoff (0-100). Omit to leave unchanged.
+             */
+            signal_threshold_green?: number | null;
+        };
+        /**
+         * OrgSignupCompleteRequest
+         * @description `POST /orgs/signup/complete`. The last step: a password, and a real organisation.
+         *
+         *     `org_signup_token` is the short-lived, single-purpose token `/orgs/signup/verify` returned — not
+         *     an access token, and not presented as an `Authorization` header. This route is
+         *     `public_route(...)` and is bearer-authenticated by this field instead, exactly as
+         *     `POST /auth/signup/set-password` already is.
+         */
+        OrgSignupCompleteRequest: {
+            /**
+             * Org Signup Token
+             * @description The short-lived, single-use signup token from POST /auth/signup/verify's response (`signup_token`). A signed token, not an opaque secret — present it exactly as issued.
+             */
+            org_signup_token: string;
+            /**
+             * Password
+             * @description The password, as typed. Never logged, never echoed, never stored.
+             */
+            password: string;
+        };
+        /**
+         * OrgSignupRequestRequest
+         * @description `POST /orgs/signup/request`. Answered identically for every input (see the module docstring).
+         *
+         *     Carries no `org_id` — there is no organisation, which is the entire point of this endpoint —
+         *     and no password: nothing about a credential is collected before inbox control is proven
+         *     (`Q-08`'s "email verification before set up password", applied to the buyer rather than to a
+         *     worker).
+         */
+        OrgSignupRequestRequest: {
+            /** Full Name */
+            full_name?: string | null;
+            /**
+             * Organization Name
+             * @description The organisation's display name, as the customer writes it — 'Sunrise Home Care', not a slug. It is stored verbatim as the organisation's name and is also what the URL slug is *derived* from (`kayla.orgs.service.slugify`); the slug is never typed. Deliberately not unique: two unrelated agencies may share a name and this works.
+             * @example Sunrise Home Care
+             */
+            organization_name: string;
+            /**
+             * Work Email
+             * @description Email address. Compared case-insensitively.
+             * @example worker@example.com
+             */
+            work_email: string;
+        };
+        /**
+         * OrgSignupRequested
+         * @description `202`, byte-identical for every input.
+         *
+         *     Not "byte-identical for every *valid* input": the whole contract is that a caller cannot tell a
+         *     brand-new address from one that already has an account, or a domain nobody uses from one an
+         *     existing customer signed up with last week. No lookup of any kind runs at this step, so there is
+         *     nothing about the input for this body to vary on — the same structural argument
+         *     `kayla.auth.schemas.SignupRequested` makes for the worker flow.
+         */
+        OrgSignupRequested: {
+            /**
+             * Status
+             * @default accepted
+             * @constant
+             */
+            status: "accepted";
+        };
+        /**
+         * OrgSignupVerified
+         * @description `POST /orgs/signup/verify` on success: the short-lived token, plus what was typed at step 1.
+         *
+         *     The echoed `organization_name`/`work_email`/`full_name` let the final screen say "Set a password
+         *     for dana@sunrisehomecare.com at Sunrise Home Care" without the client having to have kept state
+         *     across an email round trip — which it cannot be assumed to have, because the link may well be
+         *     opened on a different device from the one the form was filled in on.
+         *
+         *     Echoing them discloses nothing: the caller has just proven they control the inbox the values
+         *     were mailed to, and every value here is one they themselves supplied. No organisation exists
+         *     yet, so there is no id to leak and none is returned.
+         */
+        OrgSignupVerified: {
+            /**
+             * Full Name
+             * @description As typed at POST /orgs/signup/request, or null if omitted.
+             */
+            full_name?: string | null;
+            /**
+             * Org Signup Token
+             * @description Single-use, ~15 minutes. Present it to POST /orgs/signup/complete. A signed token, not an opaque secret — send it exactly as issued.
+             */
+            org_signup_token: string;
+            /**
+             * Org Signup Token Expires At
+             * Format: date-time
+             * @description When `org_signup_token` stops working (UTC).
+             */
+            org_signup_token_expires_at: string;
+            /**
+             * Organization Name
+             * @description As typed at POST /orgs/signup/request.
+             */
+            organization_name: string;
+            /**
+             * Work Email
+             * @description Normalised, as it will be stored on the owner account.
+             */
+            work_email: string;
+        };
+        /**
+         * OrgSignupVerifyRequest
+         * @description `POST /orgs/signup/verify`. Redeems the link (or the copyable code) the request step mailed.
+         *
+         *     `token` is the opaque secret from the email — either from the link's `?token=` or typed from the
+         *     code printed in the body, which are the same value (`kayla.email.templates`'
+         *     `ORG_SIGNUP_VERIFICATION_PATH` explains why both are rendered).
+         */
+        OrgSignupVerifyRequest: {
+            /**
+             * Token
+             * @description An opaque single-use token, exactly as issued.
+             */
+            token: string;
+        };
+        /**
+         * OverviewResponse
+         * @description `GET /dashboard/overview`. `overview_org_summary()`'s own org-wide grain, reshaped into the
+         *     tiles agents.md §10.11 task 7 names, plus the adoption funnel `active_usage` completes. "How
+         *     you compare" (Q-40) is deliberately absent — cut per agents.md §13.2.
+         *
+         *     The three funnel legs are `enrolled_headcount` (invited), `signed_up_headcount` (created an
+         *     account) and `active_usage.active_headcount` (used the product recently). All three are
+         *     headcounts, so none is ever `null` — agents.md §10.11 task 2, "headcounts are never
+         *     suppressed". The two *rates* on the same response (`active_usage.rate`, and the check-in
+         *     completion and on-track tiles below) are the suppressible half of that same sentence.
+         */
+        OverviewResponse: {
+            /** @description The adoption funnel's third leg: how many of the invited workers are actually using the product. `enrolled_headcount` -> `signed_up_headcount` -> `active_usage.active_headcount`. */
+            active_usage: components["schemas"]["ActiveUsageTile"];
+            adjustment_signals: components["schemas"]["AdjustmentSignalsTile"];
+            checkin_completion: components["schemas"]["CheckinCompletionTile"];
+            /**
+             * Enrolled Headcount
+             * @description Every roster row for the org. Never suppressed.
+             */
+            enrolled_headcount: number;
+            on_track: components["schemas"]["OnTrackTile"];
+            /**
+             * Percent Signed Up
+             * @description `signed_up_headcount / enrolled_headcount`, a 0-1 fraction. Never suppressed for privacy — `null` only when `enrolled_headcount` is 0 (no denominator). agents.md §10.11 task 2's own list names exactly two extra Overview tiles the min-N rule reaches, and this is deliberately not one of them.
+             */
+            percent_signed_up: number | null;
+            /**
+             * Signed Up Headcount
+             * @description Roster rows with a claimed login. Never suppressed.
+             */
+            signed_up_headcount: number;
+            /**
+             * Time Saved Minutes Per Week
+             * @description `enrolled_headcount * 8`. A computed constant over a headcount, never suppressed.
+             */
+            time_saved_minutes_per_week: number;
+        };
+        /**
          * PasswordResetConfirmRequest
          * @description `POST /auth/password-reset/confirm`.
          */
@@ -1391,6 +2543,14 @@ export interface components {
         /**
          * PasswordResetRequest
          * @description `POST /auth/password-reset/request`. Answered identically either way (module docstring).
+         *
+         *     `org_id` is **optional**, for the reason the module docstring's "the same circle, one screen
+         *     earlier" section gives: the worker app carries no tenant identifier anywhere by design, and a
+         *     person on a "forgot password" screen has no access token to read an `org_id` claim out of, so a
+         *     required field here made password reset unreachable from mobile entirely. Omitted, the server
+         *     resolves the tenant through the same `SECURITY DEFINER` lookup `login` uses — and, unlike
+         *     `login`, resolves an unknown or ambiguous address to an organisation that matches nothing rather
+         *     than returning early, so every case executes the same statements and produces the same `202`.
          */
         PasswordResetRequest: {
             /**
@@ -1401,10 +2561,9 @@ export interface components {
             email: string;
             /**
              * Org Id
-             * Format: uuid
-             * @description The organisation this account belongs to. Client state established at signup or from an invitation link, not something a person types — see the module docstring for why authentication cannot resolve it from the address alone.
+             * @description The organisation the account belongs to. **Optional.** Omit it — the mobile app always does, since it holds no tenant identifier by design and a signed-out person has no token to read one from — and the server resolves it from the address. The response is `202` with the same body either way, and stays `202` with the same body when no organisation holds an account at the address and when more than one does: there is no spelling of this field, present or absent, right or wrong, that tells a caller anything about whether an account exists.
              */
-            org_id: string;
+            org_id?: string | null;
         };
         /**
          * PasswordResetRequested
@@ -1429,6 +2588,52 @@ export interface components {
              * @constant
              */
             status: "password_updated";
+        };
+        /**
+         * PrivacyDisclosureResponse
+         * @description `GET /dashboard/settings/privacy-disclosure` — static, versioned copy naming this org's
+         *     *actual* suppression floor, so an HR admin reading it never sees a number that disagrees with
+         *     the one `GET /dashboard/settings` reports for the same org.
+         */
+        PrivacyDisclosureResponse: {
+            /**
+             * Min N Threshold
+             * @description This org's configured suppression floor.
+             */
+            min_n_threshold: number;
+            /**
+             * Text
+             * @description The disclosure, with `min_n_threshold` already filled in.
+             */
+            text: string;
+            /**
+             * Version
+             * @description Bumped when the wording changes; see the module docstring.
+             */
+            version: number;
+        };
+        /**
+         * PushTokenUpdateRequest
+         * @description `PUT /auth/me/push-token` (agents.md §10.10 task 2). Worker-only — see the router.
+         */
+        PushTokenUpdateRequest: {
+            /**
+             * Expo Push Token
+             * @description Whatever expo-notifications' getExpoPushTokenAsync() returned on this device. Format is Expo's to define — this validates only that something was sent.
+             */
+            expo_push_token: string;
+        };
+        /**
+         * PushTokenUpdated
+         * @description The caller's `expo_push_token` was stored, overwriting whatever was there before.
+         */
+        PushTokenUpdated: {
+            /**
+             * Status
+             * @default push_token_updated
+             * @constant
+             */
+            status: "push_token_updated";
         };
         /**
          * ReadinessResponse
@@ -1463,6 +2668,57 @@ export interface components {
              * @description An opaque single-use token, exactly as issued.
              */
             refresh_token: string;
+        };
+        /**
+         * RestoredSession
+         * @description What `POST /auth/session` returns: an access token and who it is for. **No refresh token.**
+         *
+         *     This is a separate model from :class:`SessionResponse` for one reason, and it is the reason the
+         *     endpoint exists at all. `POST /auth/session` is authenticated by a cookie, and a cookie can be
+         *     *spent* by any script running on the dashboard origin whether or not `HttpOnly` lets it be
+         *     *read*. If this answered with a `SessionResponse`, an XSS could call the endpoint and lift
+         *     :attr:`TokenPair.refresh_token` — a required field — straight out of the response body, turning
+         *     a foothold in a live page into seven days of offline access to an organisation's aggregate HR
+         *     data. Flattening the fields into a shape that has nowhere to put a refresh token is what makes
+         *     that impossible by construction rather than by remembering.
+         *
+         *     So: the field list below is a **security boundary, not a convenience**. Do not add a refresh
+         *     token to it, do not widen it to `TokenPair`, and do not make this an alias of
+         *     `SessionResponse`. `kayla.auth.cookies`' module docstring is the full argument;
+         *     `tests/test_auth_session_cookie.py` asserts the absence against the raw response bytes so that
+         *     "it is not in the model" and "it is not on the wire" are two separate, independently failing
+         *     statements.
+         *
+         *     The worst thing an XSS can do with this endpoint is what it can already do today with the token
+         *     in memory: mint 15-minute access tokens for as long as the page it compromised is alive. That
+         *     ceiling is unchanged by the cookie, which is the entire point of the design.
+         */
+        RestoredSession: {
+            /**
+             * Access Token
+             * @description Send as `Authorization: Bearer <token>`.
+             */
+            access_token: string;
+            /**
+             * Expires At
+             * Format: date-time
+             * @description When the access token expires (UTC).
+             */
+            expires_at: string;
+            /**
+             * Expires In
+             * @description Seconds until the access token expires. Call this endpoint again before then.
+             */
+            expires_in: number;
+            /**
+             * Token Type
+             * @description Always `bearer`. Present because clients expect it.
+             * @default bearer
+             * @constant
+             */
+            token_type: "bearer";
+            /** @description The account the restored session belongs to. Identical in shape to the `user` of a sign-in — `org_name` and the roster-drawn fields are null here exactly as they are on `login` and `refresh`, because this endpoint performs neither read. A client that wants them calls `GET /auth/me` with the access token above. */
+            user: components["schemas"]["AuthenticatedUser"];
         };
         /**
          * RosterConfirmRequest
@@ -1610,6 +2866,54 @@ export interface components {
         SessionResponse: {
             tokens: components["schemas"]["TokenPair"];
             user: components["schemas"]["AuthenticatedUser"];
+        };
+        /**
+         * ShiftStartAck
+         * @description What `POST /checkins/shift/start` hands back — mirrors `kayla.auth.schemas.
+         *     PushTokenUpdated`'s own minimal-ack shape: confirmation that the one canned message was sent,
+         *     nothing else. This is deliberately **not** a check-in ack (contrast `CheckinResponseAck`):
+         *     "Start my shift" never touches `checkin_responses` at all — see `kayla.checkin.shift_flow`'s
+         *     own module docstring.
+         */
+        ShiftStartAck: {
+            /**
+             * Status
+             * @default shift_start_sent
+             * @constant
+             */
+            status: "shift_start_sent";
+        };
+        /**
+         * ShiftStartRequest
+         * @description `POST /checkins/shift/start` (agents.md §10.10 task 1). `locale` picks which fixed,
+         *     canned "Start my shift" greeting is sent — mirrors `kayla.crisis.schemas.MessageRequest.
+         *     locale`/`kayla.chat.schemas.ChatMessageRequest.locale` field for field, and for the identical
+         *     reason stated there: an unsupported value is a `422` with `code=unsupported_locale`, raised by
+         *     the router before this request does anything, never a silent fallback to English.
+         */
+        ShiftStartRequest: {
+            /**
+             * Locale
+             * @description 'en' or 'es'. Defaults to 'en' when omitted. Any other value is a 422 with code=unsupported_locale — there is no silent fallback to English.
+             * @default en
+             * @example en
+             * @example es
+             */
+            locale: string;
+        };
+        /**
+         * SignalsResponse
+         * @description `GET /dashboard/signals`. One entry per cohort in scope — every cohort in the org when
+         *     `cohort_id` was omitted, or exactly the one named cohort otherwise.
+         */
+        SignalsResponse: {
+            /** Cohorts */
+            cohorts: components["schemas"]["CohortSignals"][];
+            /**
+             * Threshold Disclosure
+             * @description Always present (agents.md §10.11 task 6, Q-46): the traffic-light cutoffs are unvalidated placeholders, not a benchmarked standard.
+             */
+            threshold_disclosure: string;
         };
         /**
          * SignedOut
@@ -1949,6 +3253,108 @@ export interface operations {
             };
         };
     };
+    set_notification_preferences_auth_me_notification_preferences_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationPreferencesUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationPreferencesUpdated"];
+                };
+            };
+            /** @description The credential is missing, expired, revoked or not ours. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Signed in, but not as a worker. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_push_token_auth_me_push_token_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PushTokenUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PushTokenUpdated"];
+                };
+            };
+            /** @description The credential is missing, expired, revoked or not ours. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Signed in, but not as a worker. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     confirm_password_reset_auth_password_reset_confirm_post: {
         parameters: {
             query?: never;
@@ -2098,6 +3504,62 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Too many attempts. `Retry-After` says when to come back. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description A dependency the request needed did not answer. Requests are refused rather than admitted unenforced. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    restore_session_auth_session_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestoredSession"];
+                };
+            };
+            /** @description The credential is missing, expired, revoked or not ours. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The cookie restored a session belonging to the worker app. The cookie is cleared and nothing is issued. Unreachable from a client this API set the cookie for. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             /** @description Too many attempts. `Retry-After` says when to come back. */
@@ -2542,6 +4004,57 @@ export interface operations {
             };
         };
     };
+    start_shift_checkins_shift_start_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ShiftStartRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShiftStartAck"];
+                };
+            };
+            /** @description The credential is missing, expired, revoked or not ours. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Signed in, but not as a worker. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `locale` is not one of the supported values ('en', 'es'). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     list_coaches_coaches_get: {
         parameters: {
             query?: {
@@ -2701,6 +4214,516 @@ export interface operations {
             };
             /** @description The credential is missing, expired, revoked or not ours. */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description No cohort with this id in the caller's organisation. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_actions_dashboard_actions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NudgeResponse"][];
+                };
+            };
+            /** @description The credential is missing, expired, revoked or not ours. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Signed in, but not as an HR admin or org owner. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    approve_action_dashboard_actions__nudge_id__approve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                nudge_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NudgeResponse"];
+                };
+            };
+            /** @description The credential is missing, expired, revoked or not ours. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Signed in, but not as an HR admin or org owner. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description No nudge with this id in the caller's organisation. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description This nudge is not in a state this action can be applied to (e.g. approving an already-sent or already-dismissed nudge). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    dismiss_action_dashboard_actions__nudge_id__dismiss_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                nudge_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NudgeResponse"];
+                };
+            };
+            /** @description The credential is missing, expired, revoked or not ours. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Signed in, but not as an HR admin or org owner. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description No nudge with this id in the caller's organisation. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description This nudge is not in a state this action can be applied to (e.g. approving an already-sent or already-dismissed nudge). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_engagement_route_dashboard_engagement_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EngagementResponse"];
+                };
+            };
+            /** @description The credential is missing, expired, revoked or not ours. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Signed in, but not as an HR admin or org owner. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_overview_route_dashboard_overview_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OverviewResponse"];
+                };
+            };
+            /** @description The credential is missing, expired, revoked or not ours. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Signed in, but not as an HR admin or org owner. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_org_settings_dashboard_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgSettingsResponse"];
+                };
+            };
+            /** @description The credential is missing, expired, revoked or not ours. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Signed in, but not as an org owner (agents.md §6.1: Settings is org_owner-only, not hr_admin). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    update_org_settings_dashboard_settings_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrgSettingsUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgSettingsResponse"];
+                };
+            };
+            /** @description The credential is missing, expired, revoked or not ours. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Signed in, but not as an org owner (agents.md §6.1: Settings is org_owner-only, not hr_admin). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description A field is out of bounds, the patch is empty, or the merged amber/green thresholds are inverted. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    list_admin_users_dashboard_settings_admin_users_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminUserSummary"][];
+                };
+            };
+            /** @description The credential is missing, expired, revoked or not ours. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Signed in, but not as an org owner (agents.md §6.1: Settings is org_owner-only, not hr_admin). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_cost_of_turnover_reference_dashboard_settings_cost_of_turnover_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CostOfTurnoverReferenceCard"];
+                };
+            };
+            /** @description The credential is missing, expired, revoked or not ours. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Signed in, but not as an org owner (agents.md §6.1: Settings is org_owner-only, not hr_admin). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_privacy_disclosure_dashboard_settings_privacy_disclosure_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrivacyDisclosureResponse"];
+                };
+            };
+            /** @description The credential is missing, expired, revoked or not ours. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Signed in, but not as an org owner (agents.md §6.1: Settings is org_owner-only, not hr_admin). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_signals_route_dashboard_signals_get: {
+        parameters: {
+            query?: {
+                /** @description Restrict to one cohort. Omitted means every cohort in the org. */
+                cohort_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignalsResponse"];
+                };
+            };
+            /** @description The credential is missing, expired, revoked or not ours. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Signed in, but not as an HR admin or org owner. */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -3036,6 +5059,177 @@ export interface operations {
             };
             /** @description `locale` is not one of the supported values ('en', 'es'). There is no fallback to English. */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    complete_org_signup_orgs_signup_complete_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrgSignupCompleteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionResponse"];
+                };
+            };
+            /** @description The link is unknown, already used, or past its 24-hour window. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The password does not meet the policy (NIST SP 800-63B). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Too many attempts. `Retry-After` says when to come back. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description A dependency the request needed did not answer. Requests are refused rather than admitted unenforced. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    request_org_signup_orgs_signup_request_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrgSignupRequestRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgSignupRequested"];
+                };
+            };
+            /** @description The address is on a free or disposable email provider (`business_email_required`), or the body does not match the contract. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Too many attempts. `Retry-After` says when to come back. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description A dependency the request needed did not answer. Requests are refused rather than admitted unenforced. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    verify_org_signup_orgs_signup_verify_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrgSignupVerifyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgSignupVerified"];
+                };
+            };
+            /** @description The link is unknown, already used, or past its 24-hour window. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Too many attempts. `Retry-After` says when to come back. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description A dependency the request needed did not answer. Requests are refused rather than admitted unenforced. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
