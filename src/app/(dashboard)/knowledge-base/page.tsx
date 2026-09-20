@@ -38,11 +38,15 @@ import { useEffect, useRef, useState } from "react";
 import { ApiError, CLIENT_ERROR_CODES, getSession } from "@/api/client";
 import { env } from "@/env";
 import { KbDocumentCard, isKbDocumentTerminal } from "@/components/kb-document-card";
-import type { KbDocument } from "@/components/kb-document-card";
+import type { KbDocument, KbDocumentStatus } from "@/components/kb-document-card";
+import { AppPage } from "@/components/ui/app-page";
 import { LinkButton } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
+import { SearchField } from "@/components/ui/search-field";
 import { PageSkeleton } from "@/components/ui/skeleton";
+import { TabPanel, Tabs } from "@/components/ui/tabs";
+import type { TabItem } from "@/components/ui/tabs";
 
 const API_ROOT = env.NEXT_PUBLIC_API_BASE_URL.replace(/\/+$/, "");
 
@@ -139,8 +143,64 @@ type LoadState =
   | { readonly status: "error"; readonly message: string }
   | { readonly status: "loaded"; readonly documents: readonly KbDocument[] };
 
+/* -------------------------------------------------------------------------------------------
+ * Narrowing the list
+ *
+ * Two controls, and both exist because a handbook library is not four files for long. koruux's
+ * survey names "classification categories (all, current, new, discharged, high priority)" as the
+ * pattern for a clinical list, and a status filter is that pattern here.
+ *
+ * The twelve machine statuses collapse to four groups a person actually thinks in. The grouping
+ * is derived from `status`, never parsed back out of `status_display` — Q-51 owns that copy and
+ * may reword it at any time.
+ *
+ * The labels are deliberately *not* words that can appear in `status_display`. "Processing",
+ * "Indexed" and "Queued" are all display copy, and a filter chip reading the same words as a
+ * badge underneath it is ambiguous to read and ambiguous to test.
+ * ---------------------------------------------------------------------------------------- */
+
+type StatusGroup = "all" | "in-progress" | "ready" | "attention" | "replaced";
+
+const FILTER_ORDER: readonly StatusGroup[] = [
+  "all",
+  "in-progress",
+  "ready",
+  "attention",
+  "replaced",
+];
+
+const FILTER_LABEL: Readonly<Record<StatusGroup, string>> = {
+  all: "All documents",
+  "in-progress": "In progress",
+  ready: "Ready",
+  attention: "Needs attention",
+  replaced: "Replaced",
+};
+
+function groupOf(status: KbDocumentStatus): StatusGroup {
+  if (!isKbDocumentTerminal(status)) return "in-progress";
+  if (status === "indexed") return "ready";
+  if (status === "superseded") return "replaced";
+  // Every remaining terminal status is a `failed_*` or the injection quarantine: something a
+  // person has to look at. `failed_no_text_layer` retries itself, but it is still the row a
+  // person wants surfaced rather than filed under "ready".
+  return "attention";
+}
+
+/** Title or filename — the two things someone would type to find a document again. */
+function matchesQuery(document: KbDocument, query: string): boolean {
+  const needle = query.trim().toLowerCase();
+  if (needle.length === 0) return true;
+  return (
+    document.title.toLowerCase().includes(needle) ||
+    document.filename.toLowerCase().includes(needle)
+  );
+}
+
 export default function KnowledgeBasePage() {
   const [state, setState] = useState<LoadState>({ status: "loading" });
+  const [query, setQuery] = useState("");
+  const [group, setGroup] = useState<StatusGroup>("all");
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -170,15 +230,46 @@ export default function KnowledgeBasePage() {
     };
   }, []);
 
-  return (
-    <div className="mx-auto flex w-full max-w-5xl flex-col gap-24 p-32">
-      <PageHeader
-        eyebrow="Knowledge Base"
-        title="Knowledge Base"
-        description="Upload your employee handbook and policy documents so Kayla can answer questions from them, with a citation back to the exact section every time."
-        actions={<LinkButton href="/knowledge-base/upload">Upload document</LinkButton>}
-      />
+  const documents = state.status === "loaded" ? state.documents : [];
+  const searched = documents.filter((document) => matchesQuery(document, query));
+  const visible = searched.filter((document) => groupOf(document.status) === group || group === "all");
+  const hasDocuments = state.status === "loaded" && documents.length > 0;
 
+  const filters: readonly TabItem<StatusGroup>[] = FILTER_ORDER.map((key) => ({
+    key,
+    label: FILTER_LABEL[key],
+    count:
+      key === "all"
+        ? searched.length
+        : searched.filter((document) => groupOf(document.status) === key).length,
+  }));
+
+  return (
+    <AppPage
+      header={
+        <PageHeader
+          eyebrow="Knowledge Base"
+          title="Knowledge Base"
+          description="Upload your employee handbook and policy documents so Kayla can answer questions from them, with a citation back to the exact section every time."
+          actions={<LinkButton href="/knowledge-base/upload">Upload document</LinkButton>}
+        />
+      }
+      toolbar={
+        hasDocuments ? (
+          <SearchField
+            label="Search documents by title or filename"
+            placeholder="Search documents…"
+            value={query}
+            onValueChange={setQuery}
+          />
+        ) : undefined
+      }
+      tabs={
+        hasDocuments ? (
+          <Tabs items={filters} activeKey={group} onChange={setGroup} label="Filter by status" />
+        ) : undefined
+      }
+    >
       {state.status === "loading" ? <PageSkeleton label="Loading documents…" /> : null}
 
       {state.status === "error" ? (
@@ -202,16 +293,26 @@ export default function KnowledgeBasePage() {
         />
       ) : null}
 
-      {state.status === "loaded" && state.documents.length > 0 ? (
-        <ul className="flex list-none flex-col gap-16 p-[0]">
-          {state.documents.map((document) => (
-            <li key={document.id}>
-              <KbDocumentCard document={document} />
-            </li>
-          ))}
-        </ul>
+      {hasDocuments && visible.length === 0 ? (
+        <EmptyState
+          icon={<DocumentGlyph />}
+          title="Nothing matches those filters"
+          description="Try a different status, or clear the search box."
+        />
       ) : null}
-    </div>
+
+      {visible.length > 0 ? (
+        <TabPanel tabKey={group} activeKey={group}>
+          <ul className="grid list-none grid-cols-1 gap-16 p-[0] xl:grid-cols-2 2xl:grid-cols-3">
+            {visible.map((document) => (
+              <li key={document.id}>
+                <KbDocumentCard document={document} />
+              </li>
+            ))}
+          </ul>
+        </TabPanel>
+      ) : null}
+    </AppPage>
   );
 }
 

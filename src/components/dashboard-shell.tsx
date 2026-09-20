@@ -14,6 +14,51 @@
  *    open. The control that opens it is the top bar's hamburger, which is outside the drawer.
  *
  * --------------------------------------------------------------------------------------------
+ * An app frame, not a padded page
+ * --------------------------------------------------------------------------------------------
+ * This used to be a page with a floating rail on it: the whole thing sat inside `p-24`, the rail
+ * was a rounded card with a gap beside it, and the frame grew with `min-h-screen` so the browser
+ * scrolled the document. Every screen then re-capped itself at `max-w-5xl` on top of that, and a
+ * wide display ended up with a narrow ribbon of content between two empty margins.
+ *
+ * It is now an application frame:
+ *
+ *   `h-dvh overflow-hidden`  the frame is exactly the viewport and never scrolls itself
+ *   rail flush to the edge   no outer padding, no gap — the rail *is* the left edge
+ *   only `<main>` scrolls    so the rail and the top bar stay put, and a page's own sticky
+ *                            header (see `ui/app-page.tsx`) has something to stick to
+ *
+ * `h-dvh` rather than `h-screen`: on mobile Safari and Chrome `100vh` is the viewport *with the
+ * URL bar hidden*, so a `h-screen` frame is taller than the visible area and the bottom of every
+ * page sits under the browser chrome until you scroll. `dvh` tracks the bar as it retracts.
+ *
+ * --------------------------------------------------------------------------------------------
+ * The top bar carries page context, and nothing else
+ * --------------------------------------------------------------------------------------------
+ * No account menu, no avatar, no sign-out. The design system puts Settings and Sign out in the
+ * sidebar footer (`SidebarNavigation.prompt.md`: "Footer items (Settings, Sign out) pin to the
+ * bottom"), and an action that exists in two places is an action a person has to check twice.
+ * What is here instead is the one thing the rail cannot show at every breakpoint: where you are
+ * — because below `md` the rail is off-canvas and the only clue to the current page would
+ * otherwise be the page's own `<h1>`, which can be scrolled off.
+ *
+ * **There is deliberately no global search box here**, although a persistent search is the most
+ * repeated recommendation in the healthcare-UI survey this redesign follows. Nothing in this
+ * backend answers a cross-entity query — there is no endpoint a top-bar search could call — and
+ * a control that looks like search but only searches the screen you happen to be on is worse
+ * than no control. Search is therefore real and per-screen, in each page's own toolbar, over
+ * data the page already holds. When a search endpoint exists, this is where it goes.
+ *
+ * The section name is read from the URL through `findActiveNavItem`, the same function the rail
+ * uses for `aria-current`, so the two can never disagree about which page is current.
+ *
+ * `aria-hidden` on the section name: it duplicates the page's own `<h1>` a few hundred pixels
+ * below it, and a screen reader reading the same words twice in a row is noise, not context.
+ *
+ * The organisation's name is deliberately *not* repeated here. The rail already shows it, and
+ * `dashboard-shell.test.tsx` reads it with a singular `getByText` — one name, in one place.
+ *
+ * --------------------------------------------------------------------------------------------
  * Why "signed out" and "not yet" render differently
  * --------------------------------------------------------------------------------------------
  * This component used to return `null` whenever the session was null, and that was right while the
@@ -31,23 +76,9 @@
  *
  * A skeleton rather than a spinner, per `src/components/ui/skeleton.tsx`: it pre-draws the layout
  * that is about to arrive instead of animating in place, and it carries the one `role="status"`
- * announcement a screen reader needs while a sighted user gets the shape of the page.
- *
- * --------------------------------------------------------------------------------------------
- * The top bar carries page context, and nothing else
- * --------------------------------------------------------------------------------------------
- * No account menu, no avatar, no sign-out. The design system puts Settings and Sign out in the
- * sidebar footer (`SidebarNavigation.prompt.md`: "Footer items (Settings, Sign out) pin to the
- * bottom"), and an action that exists in two places is an action a person has to check twice.
- * What is here instead is the one thing the rail cannot show at every breakpoint: where you are
- * — because below `md` the rail is off-canvas and the only clue to the current page would
- * otherwise be the page's own `<h1>`, which can be scrolled off.
- *
- * The section name is read from the URL through `findActiveNavItem`, the same function the rail
- * uses for `aria-current`, so the two can never disagree about which page is current.
- *
- * `aria-hidden` on the section name: it duplicates the page's own `<h1>` a few hundred pixels
- * below it, and a screen reader reading the same words twice in a row is noise, not context.
+ * announcement a screen reader needs while a sighted user gets the shape of the page. Exactly one:
+ * a second live region in this frame would make `getByRole("status")` ambiguous for every page
+ * test that waits on it.
  */
 
 import { usePathname } from "next/navigation";
@@ -61,6 +92,14 @@ import { useAuthenticatedSession } from "@/lib/session";
 export interface DashboardShellProps {
   readonly children: ReactNode;
 }
+
+/** The outer frame, shared verbatim by the restoring and the signed-in states so that the
+ *  transition between them is a fill-in rather than a re-layout. */
+const FRAME_CLASS = "flex h-dvh w-full overflow-hidden bg-surface-page";
+
+/** The top bar. A real bar now rather than a hairline strip, but still only context. */
+const TOP_BAR_CLASS =
+  "flex min-h-64 shrink-0 items-center gap-12 border-b border-hairline-lilac bg-surface-card px-16 lg:px-24";
 
 function MenuGlyph() {
   return (
@@ -86,17 +125,15 @@ function MenuGlyph() {
 /**
  * The frame, with no rail and no page — what a reload draws while the session is being restored.
  *
- * Deliberately shares the outer container's classes with the real shell below so that the
- * transition is a fill-in rather than a re-layout. Everything identifying is absent: the rail would
- * have to invent an organisation name and a set of destinations for someone who may turn out not to
- * be signed in at all.
+ * Everything identifying is absent: the rail would have to invent an organisation name and a set
+ * of destinations for someone who may turn out not to be signed in at all.
  */
 function RestoringShell() {
   return (
-    <div className="flex min-h-screen w-full items-stretch gap-24 bg-surface-page p-24">
-      <div className="flex min-w-[0] flex-1 flex-col">
-        <header className="flex min-h-48 shrink-0 items-center gap-12 border-b border-hairline-lilac px-8 py-8" />
-        <main className="min-w-[0] flex-1 p-24">
+    <div className={FRAME_CLASS}>
+      <div className="flex min-w-[0] flex-1 flex-col overflow-hidden">
+        <header className={TOP_BAR_CLASS} />
+        <main className="min-w-[0] flex-1 overflow-y-auto p-24 lg:p-32">
           <PageSkeleton label="Loading your dashboard…" shape="grid" />
         </main>
       </div>
@@ -145,14 +182,14 @@ export function DashboardShell({ children }: DashboardShellProps) {
   const activeItem = findActiveNavItem(pathname);
 
   return (
-    <div className="flex min-h-screen w-full items-stretch gap-24 bg-surface-page p-24">
+    <div className={FRAME_CLASS}>
       <SidebarNav
         user={session.user}
         mobileOpen={mobileNavOpen}
         onMobileClose={() => setDrawer({ open: false, at: pathname })}
       />
-      <div className="flex min-w-[0] flex-1 flex-col">
-        <header className="flex min-h-48 shrink-0 items-center gap-12 border-b border-hairline-lilac px-8 py-8">
+      <div className="flex min-w-[0] flex-1 flex-col overflow-hidden">
+        <header className={TOP_BAR_CLASS}>
           <button
             type="button"
             onClick={() => setDrawer({ open: true, at: pathname })}
@@ -162,15 +199,25 @@ export function DashboardShell({ children }: DashboardShellProps) {
           >
             <MenuGlyph />
           </button>
-          <p
-            aria-hidden="true"
-            className="truncate text-eyebrow font-bold uppercase tracking-eyebrow text-text-tertiary"
-          >
-            Kayla Health
-            {activeItem === null ? null : ` · ${activeItem.label}`}
+          {/* A trail, not a title: the product, then where in it you are. The page's own `<h1>`
+              says the same thing louder a moment below, which is why the whole line is hidden
+              from assistive technology rather than read out twice. */}
+          <p aria-hidden="true" className="flex min-w-[0] items-center gap-8">
+            <span className="shrink-0 text-eyebrow font-bold uppercase tracking-eyebrow text-text-tertiary">
+              Kayla Health
+            </span>
+            {activeItem === null ? null : (
+              <>
+                <span className="shrink-0 text-text-tertiary">/</span>
+                <span className="truncate text-label font-bold text-text-primary">
+                  {activeItem.label}
+                </span>
+              </>
+            )}
           </p>
         </header>
-        <main className="min-w-[0] flex-1">{children}</main>
+        {/* The only scrolling region in the application. */}
+        <main className="min-w-[0] flex-1 overflow-y-auto">{children}</main>
       </div>
     </div>
   );

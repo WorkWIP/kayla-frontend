@@ -56,9 +56,12 @@ import { useEffect, useState } from "react";
 import { ApiError, CLIENT_ERROR_CODES, apiRequest } from "@/api/client";
 import { CheckinQuestionCard } from "@/components/checkin-question-card";
 import type { CheckinQuestion } from "@/components/checkin-question-card";
+import { AppPage } from "@/components/ui/app-page";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { PageSkeleton } from "@/components/ui/skeleton";
+import { TabPanel, Tabs } from "@/components/ui/tabs";
+import type { TabItem } from "@/components/ui/tabs";
 
 type LoadState =
   | { readonly status: "loading" }
@@ -91,8 +94,37 @@ function messageFor(error: unknown): string {
   return GENERIC_FAILURE;
 }
 
+/* -------------------------------------------------------------------------------------------
+ * Filtering by milestone
+ *
+ * A question belongs to *several* milestones — `milestone_days` is a list, and the common case is
+ * a question asked at day 7 and again at day 90. So this filters rather than groups: grouping
+ * would print the same question under four headings and make a set of six questions look like a
+ * set of twenty.
+ *
+ * The days are read off the data, never hardcoded to 7/30/60/90. A question set is configured per
+ * organisation by Kayla Ops, and a hardcoded strip would silently hide a milestone someone had
+ * actually configured.
+ *
+ * The labels read "7 days", not "Day 7", and that is load-bearing rather than stylistic: the
+ * cards below render "Day 7" chips, and a filter control carrying the identical string would be
+ * ambiguous both to a person scanning the screen and to a test looking for one of them.
+ * ---------------------------------------------------------------------------------------- */
+
+const ALL_MILESTONES = "all";
+
+/** Every milestone any question in the set is asked at, ascending. */
+function milestoneDaysIn(questions: readonly CheckinQuestion[]): readonly number[] {
+  const days = new Set<number>();
+  for (const question of questions) {
+    for (const day of question.milestone_days) days.add(day);
+  }
+  return [...days].sort((left, right) => left - right);
+}
+
 export default function CheckInQuestionsPage() {
   const [state, setState] = useState<LoadState>({ status: "loading" });
+  const [milestone, setMilestone] = useState<string>(ALL_MILESTONES);
 
   useEffect(() => {
     let cancelled = false;
@@ -126,14 +158,45 @@ export default function CheckInQuestionsPage() {
     };
   }, []);
 
-  return (
-    <div className="mx-auto flex w-full max-w-5xl flex-col gap-24 p-32">
-      <PageHeader
-        eyebrow="Check-in Questions"
-        title="Check-in Questions"
-        description="What Kayla asks new hires at each milestone check-in, and when. This view shows the current, active question set for this organization. Editing is not available yet."
-      />
+  const questions = state.status === "loaded" ? state.questions : [];
+  const days = milestoneDaysIn(questions);
+  const visible =
+    milestone === ALL_MILESTONES
+      ? questions
+      : questions.filter((question) => question.milestone_days.includes(Number(milestone)));
 
+  // One milestone is not a choice, so the strip only appears once there is something to choose
+  // between.
+  const filterable = days.length > 1;
+  const milestoneTabs: readonly TabItem[] = [
+    { key: ALL_MILESTONES, label: "All questions", count: questions.length },
+    ...days.map((day) => ({
+      key: String(day),
+      label: `${day} days`,
+      count: questions.filter((question) => question.milestone_days.includes(day)).length,
+    })),
+  ];
+
+  return (
+    <AppPage
+      header={
+        <PageHeader
+          eyebrow="Check-in Questions"
+          title="Check-in Questions"
+          description="What Kayla asks new hires at each milestone check-in, and when. This view shows the current, active question set for this organization. Editing is not available yet."
+        />
+      }
+      tabs={
+        filterable ? (
+          <Tabs
+            items={milestoneTabs}
+            activeKey={milestone}
+            onChange={setMilestone}
+            label="Filter by milestone"
+          />
+        ) : undefined
+      }
+    >
       {state.status === "loading" ? <PageSkeleton label="Loading the question set…" /> : null}
 
       {state.status === "error" ? (
@@ -162,20 +225,35 @@ export default function CheckInQuestionsPage() {
               state.questions.length === 1 ? "" : "s"
             }`}
           </p>
-          {state.questions.length === 0 ? (
+          {questions.length === 0 ? (
             <EmptyState
               title="This question set has no questions"
               description="The set is active but empty, so no milestone check-in will ask anything. Kayla Ops can add questions to it."
             />
           ) : (
-            <ul aria-label="Check-in questions" className="flex list-none flex-col gap-16 p-[0]">
-              {state.questions.map((question, index) => (
-                <CheckinQuestionCard key={question.id} question={question} position={index + 1} />
-              ))}
-            </ul>
+            <TabPanel tabKey={milestone} activeKey={milestone}>
+              {/* `position` stays the question's place in the *set*, not in the filtered view:
+                  the ordinal is how Kayla Ops refers to a question, and renumbering it as you
+                  filter would make two people looking at the same set disagree about which one
+                  is "question 3". */}
+              <ul
+                aria-label="Check-in questions"
+                className="grid list-none grid-cols-1 gap-16 p-[0] xl:grid-cols-2 2xl:grid-cols-3"
+              >
+                {questions.map((question, index) =>
+                  visible.includes(question) ? (
+                    <CheckinQuestionCard
+                      key={question.id}
+                      question={question}
+                      position={index + 1}
+                    />
+                  ) : null,
+                )}
+              </ul>
+            </TabPanel>
           )}
         </div>
       ) : null}
-    </div>
+    </AppPage>
   );
 }

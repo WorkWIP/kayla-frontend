@@ -26,20 +26,24 @@
  * parameter seam belongs to whoever owns that file next (reported in this phase's notes).
  */
 
-import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { ApiError, CLIENT_ERROR_CODES, getSession } from "@/api/client";
 import type { components } from "@/api/generated";
+import { AppPage } from "@/components/ui/app-page";
 import { LinkButton } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
+import { SearchField } from "@/components/ui/search-field";
 import { PageSkeleton } from "@/components/ui/skeleton";
 import { Table, TableCell, TableEmptyRow, TableRow } from "@/components/ui/table";
 import { env } from "@/env";
 
 type CohortDetailResponse = components["schemas"]["CohortDetailResponse"];
+/** One row of the roster — named here rather than re-spelled at each use below. */
+type RosterEntry = CohortDetailResponse["entries"][number];
 type ErrorEnvelope = components["schemas"]["ErrorEnvelope"];
 
 const API_ROOT = env.NEXT_PUBLIC_API_BASE_URL.replace(/\/+$/, "");
@@ -149,9 +153,73 @@ function messageFor(error: unknown): string {
   return "Could not load this cohort.";
 }
 
+/** Name, email, site or role — anything a person would type to find one row in a long roster. */
+function matchesQuery(entry: RosterEntry, query: string): boolean {
+  const needle = query.trim().toLowerCase();
+  if (needle.length === 0) return true;
+  return [entry.last_name, entry.first_name, entry.email, entry.site_name, entry.role_title].some(
+    (field) => field !== null && field !== undefined && field.toLowerCase().includes(needle),
+  );
+}
+
+/**
+ * How many entries fall under each distinct value of one field, commonest first.
+ *
+ * This is the whole of the context panel: a roster is a flat list, and "which sites are these
+ * people at" is a question you otherwise answer by scrolling and counting. Derived here rather
+ * than asked for — `GET /cohorts/{id}` already sends every row, so a second request would be
+ * asking the server to count what is already in memory.
+ */
+function tally(
+  entries: readonly RosterEntry[],
+  pick: (entry: RosterEntry) => string | null | undefined,
+): readonly { readonly label: string; readonly count: number }[] {
+  const counts = new Map<string, number>();
+  for (const entry of entries) {
+    const value = pick(entry);
+    if (value === null || value === undefined || value.length === 0) continue;
+    counts.set(value, (counts.get(value) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([label, count]) => ({ label, count }))
+    .sort((left, right) => right.count - left.count || left.label.localeCompare(right.label));
+}
+
+/** One "Riverside Clinic — 12" row in the context panel. */
+function BreakdownCard({
+  title,
+  rows,
+  emptyLabel,
+}: {
+  readonly title: string;
+  readonly rows: readonly { readonly label: string; readonly count: number }[];
+  readonly emptyLabel: string;
+}) {
+  return (
+    <Card className="flex flex-col gap-12">
+      <h2 className="text-label font-bold text-text-primary">{title}</h2>
+      {rows.length === 0 ? (
+        <p className="text-meta text-text-tertiary">{emptyLabel}</p>
+      ) : (
+        <ul className="flex list-none flex-col gap-8 p-[0]">
+          {rows.map((row) => (
+            <li key={row.label} className="flex items-baseline justify-between gap-12">
+              <span className="truncate text-copy text-text-secondary">{row.label}</span>
+              <span className="shrink-0 text-label font-extrabold text-text-primary">
+                {row.count}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
+  );
+}
+
 export default function CohortDetailPage() {
   const { id: cohortId } = useParams<{ id: string }>();
   const [state, setState] = useState<LoadState>({ status: "loading" });
+  const [query, setQuery] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -180,15 +248,54 @@ export default function CohortDetailPage() {
     };
   }, [cohortId]);
 
-  return (
-    <div className="mx-auto flex w-full max-w-5xl flex-col gap-24 p-32">
-      <Link
-        href="/cohorts"
-        className="w-fit text-label font-medium text-text-link underline underline-offset-2"
-      >
-        ← Back to cohorts
-      </Link>
+  const entries = state.status === "loaded" ? state.detail.entries : [];
+  const visible = entries.filter((entry) => matchesQuery(entry, query));
+  const cohortLabel = state.status === "loaded" ? state.detail.cohort.label : "Cohort";
 
+  return (
+    <AppPage
+      header={
+        <PageHeader
+          backLink={{ href: "/cohorts", label: "← Back to cohorts" }}
+          eyebrow="Cohort"
+          title={cohortLabel}
+          description={
+            state.status === "loaded"
+              ? entries.length === 1
+                ? "1 roster entry"
+                : `${entries.length} roster entries`
+              : undefined
+          }
+        />
+      }
+      toolbar={
+        entries.length > 0 ? (
+          <SearchField
+            label="Search this roster by name, email, site or role"
+            placeholder="Search roster…"
+            value={query}
+            onValueChange={setQuery}
+          />
+        ) : undefined
+      }
+      aside={
+        entries.length > 0 ? (
+          <>
+            <BreakdownCard
+              title="Sites"
+              rows={tally(entries, (entry) => entry.site_name)}
+              emptyLabel="No site recorded on any row in this cohort."
+            />
+            <BreakdownCard
+              title="Roles"
+              rows={tally(entries, (entry) => entry.role_title)}
+              emptyLabel="No role recorded on any row in this cohort."
+            />
+          </>
+        ) : undefined
+      }
+      asideLabel="Cohort breakdown"
+    >
       {state.status === "loading" ? (
         <PageSkeleton label="Loading cohort…" shape="form" count={5} />
       ) : null}
@@ -213,26 +320,24 @@ export default function CohortDetailPage() {
 
       {state.status === "loaded" ? (
         <>
-          <PageHeader
-            eyebrow="Cohort"
-            title={state.detail.cohort.label}
-            description={
-              state.detail.entries.length === 1
-                ? "1 roster entry"
-                : `${state.detail.entries.length} roster entries`
-            }
-          />
-
           <Table
             caption={`Roster entries in the ${state.detail.cohort.label} cohort`}
             headers={ROSTER_COLUMNS}
           >
-            {state.detail.entries.length === 0 ? (
+            {entries.length === 0 ? (
               <TableEmptyRow colSpan={ROSTER_COLUMNS.length}>
                 No roster entries in this cohort.
               </TableEmptyRow>
             ) : null}
-            {state.detail.entries.map((entry) => (
+            {/* A search that matches nothing says so in the table, in the place the rows would
+                have been — not as a page-level empty state, which would read as "this cohort is
+                empty" when what happened is "your search found nobody". */}
+            {entries.length > 0 && visible.length === 0 ? (
+              <TableEmptyRow colSpan={ROSTER_COLUMNS.length}>
+                No roster entry matches that search.
+              </TableEmptyRow>
+            ) : null}
+            {visible.map((entry) => (
               <TableRow key={entry.id}>
                 <TableCell tone="primary">{entry.last_name}</TableCell>
                 <TableCell tone="primary">{entry.first_name}</TableCell>
@@ -245,6 +350,6 @@ export default function CohortDetailPage() {
           </Table>
         </>
       ) : null}
-    </div>
+    </AppPage>
   );
 }

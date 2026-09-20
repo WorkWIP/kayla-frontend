@@ -21,17 +21,47 @@ afterEach(() => {
 });
 
 describe("the landing page", () => {
-  it("renders the wordmark as type, with no image and no logo file", () => {
+  /**
+   * This assertion used to be the opposite one, and the reason it changed is worth recording.
+   *
+   * It read "renders the wordmark as type, with no image and no logo file", and required that
+   * neither an `<img>` nor an `<svg>` appear anywhere on the page. That was not an accident and
+   * not over-specification: `kb/design_system/readme.md:294` said "There is no logo file in the
+   * source... Do not draw a logo — ask for one", so any image here would have meant somebody had
+   * drawn one. The `KH` plum disc was the honest stand-in.
+   *
+   * A logo has since been supplied — `kb/design_system/assets/brand/kayla-logo.png`, copied into
+   * this app at `public/brand/kayla-mark.png` — so the premise no longer holds. The rule it was
+   * protecting still does, and is what this test now pins instead:
+   *
+   *   - the only image on the page is that supplied mark, and it is decorative;
+   *   - there is still no `<svg>`, so no illustration has been drawn to go with it;
+   *   - the brand still reads as type, because the mark alone does not name the product.
+   *
+   * If this ever fails because a second image appeared, the question to ask is not "how do I
+   * make the count pass" but "what got drawn, and who asked for it".
+   */
+  it("shows the supplied brand mark, decoratively, and still names the product as type", () => {
     const { container } = render(<LandingPage />);
 
-    // The brand is type. `kb/design_system/readme.md:294`: "There is no logo file in the
-    // source... Do not draw a logo — ask for one." An <img> or an <svg> here would mean one was
-    // drawn.
-    expect(container.querySelector("img")).toBeNull();
+    const images = container.querySelectorAll("img");
+    expect(images).toHaveLength(1);
+
+    // Decorative: the wordmark beside it already says "Kayla Health", and a screen reader
+    // announcing the mark as well would say the name twice.
+    const mark = images[0] as HTMLImageElement;
+    expect(mark.getAttribute("alt")).toBe("");
+    expect(mark.getAttribute("aria-hidden")).toBe("true");
+    expect(mark.getAttribute("src")).toContain("kayla-mark");
+
+    // No illustration has been invented to accompany it.
     expect(container.querySelector("svg")).toBeNull();
+
+    // The brand is still type: the mark is a shape, not a name.
     expect(screen.getAllByText("Kayla Health").length).toBeGreaterThan(0);
-    // The established app mark: the plum disc carrying the initials, same as the sidebar rail.
-    expect(screen.getByText("KH")).not.toBeNull();
+
+    // And the initials stand-in the mark replaced is gone, rather than sitting beside it.
+    expect(screen.queryByText("KH")).toBeNull();
   });
 
   it("has exactly one h1, and it says what the product does", () => {

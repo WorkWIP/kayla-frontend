@@ -40,6 +40,10 @@
  * It retires itself the moment all three are true — an onboarding checklist that never goes away
  * is a permanent accusation.
  *
+ * It sits in the page's context panel rather than above the numbers. It used to push the whole
+ * dashboard down a screen on exactly the orgs whose figures most needed explaining, and "what to
+ * do next" is the definition of supplementary: useful beside the numbers, not in front of them.
+ *
  * The two extra reads are fired only after the overview itself loads, and only for their length:
  * an unparseable or failed response is treated as "not done yet", never as an error worth
  * interrupting the page for. This screen's job is the aggregates; the checklist is advice.
@@ -67,6 +71,7 @@ import { humanizeConstructId } from "@/components/checkin-question-card";
 import { KpiStat, KpiTile } from "@/components/kpi-tile";
 import { SuppressedNotice } from "@/components/suppressed-notice";
 import { TrafficLightMeter } from "@/components/traffic-light-meter";
+import { AppPage } from "@/components/ui/app-page";
 import { LinkButton } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
 import { PageSkeleton, Skeleton } from "@/components/ui/skeleton";
@@ -130,13 +135,21 @@ export default function OverviewPage() {
   }, []);
 
   return (
-    <div className="mx-auto flex w-full max-w-5xl flex-col gap-24 p-32">
-      <PageHeader
-        eyebrow="Overview"
-        title="Overview"
-        description="Org-wide participation and adjustment signals. Every number below is an aggregate — no individual worker’s answers, mood, or Kayla use ever appears here."
-      />
-
+    <AppPage
+      header={
+        <PageHeader
+          eyebrow="Overview"
+          title="Overview"
+          description="Org-wide participation and adjustment signals. Every number below is an aggregate — no individual worker’s answers, mood, or Kayla use ever appears here."
+        />
+      }
+      aside={
+        state.status === "loaded" ? (
+          <GettingStartedChecklist overview={state.overview} />
+        ) : undefined
+      }
+      asideLabel="Getting started"
+    >
       {state.status === "loading" ? (
         <PageSkeleton label="Loading the overview…" shape="grid" count={6} />
       ) : null}
@@ -151,13 +164,8 @@ export default function OverviewPage() {
         </div>
       ) : null}
 
-      {state.status === "loaded" ? (
-        <>
-          <GettingStartedChecklist overview={state.overview} />
-          <OverviewTiles overview={state.overview} />
-        </>
-      ) : null}
-    </div>
+      {state.status === "loaded" ? <OverviewTiles overview={state.overview} /> : null}
+    </AppPage>
   );
 }
 
@@ -325,64 +333,98 @@ function OverviewTiles({ overview }: { readonly overview: OverviewResponse }) {
       : `${formatHeadcount(overview.signed_up_headcount)} of ${formatHeadcount(overview.enrolled_headcount)} signed up`;
 
   return (
-    <div className="grid grid-cols-1 gap-16 sm:grid-cols-2 lg:grid-cols-3">
-      <KpiTile label="New hires enrolled" href="/cohorts">
-        <KpiStat value={formatHeadcount(overview.enrolled_headcount)} caption="Every roster row for this org" />
-      </KpiTile>
+    <div className="flex flex-col gap-16">
+      {/*
+        The adoption funnel and its two outcome rates, as one strip — six across on a wide
+        display rather than three. These are single figures with a caption, they exist to be
+        compared with one another, and a comparison you have to scroll between is not one.
+      */}
+      <div className="grid grid-cols-1 gap-16 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
+        <KpiTile label="New hires enrolled" href="/cohorts">
+          <KpiStat value={formatHeadcount(overview.enrolled_headcount)} caption="Every roster row for this org" />
+        </KpiTile>
 
-      <KpiTile label="Signed up">
-        <KpiStat
-          value={overview.percent_signed_up === null ? "—" : formatPercent(overview.percent_signed_up)}
-          caption={signedUpCaption}
-        />
-      </KpiTile>
-
-      {/* The adoption funnel's third leg — enrolled -> signed up -> active. The headcount is
-          never suppressed; the rate is, which is why the two are read separately. */}
-      <KpiTile label="Active">
-        {overview.active_usage.suppressed ? (
-          <SuppressedNotice statusLabel={overview.active_usage.status_label} />
-        ) : (
+        <KpiTile label="Signed up">
           <KpiStat
-            value={
-              overview.active_usage.rate === null ? "—" : formatPercent(overview.active_usage.rate)
-            }
-            caption={`${formatHeadcount(overview.active_usage.active_headcount)} used Kayla in the last ${formatHeadcount(overview.active_usage.window_days)} days`}
+            value={overview.percent_signed_up === null ? "—" : formatPercent(overview.percent_signed_up)}
+            caption={signedUpCaption}
           />
-        )}
-      </KpiTile>
+        </KpiTile>
 
-      <KpiTile label="Check-in completion">
-        {overview.checkin_completion.suppressed ? (
-          <SuppressedNotice statusLabel={overview.checkin_completion.status_label} />
-        ) : (
+        {/* The adoption funnel's third leg — enrolled -> signed up -> active. The headcount is
+            never suppressed; the rate is, which is why the two are read separately. */}
+        <KpiTile label="Active">
+          {overview.active_usage.suppressed ? (
+            <SuppressedNotice statusLabel={overview.active_usage.status_label} />
+          ) : (
+            <KpiStat
+              value={
+                overview.active_usage.rate === null ? "—" : formatPercent(overview.active_usage.rate)
+              }
+              caption={`${formatHeadcount(overview.active_usage.active_headcount)} used Kayla in the last ${formatHeadcount(overview.active_usage.window_days)} days`}
+            />
+          )}
+        </KpiTile>
+
+        <KpiTile label="Check-in completion">
+          {overview.checkin_completion.suppressed ? (
+            <SuppressedNotice statusLabel={overview.checkin_completion.status_label} />
+          ) : (
+            <KpiStat
+              value={
+                overview.checkin_completion.rate === null
+                  ? "—"
+                  : formatPercent(overview.checkin_completion.rate)
+              }
+              caption={`${formatHeadcount(overview.checkin_completion.completed_checkins)} of ${formatHeadcount(overview.checkin_completion.required_checkins)} check-ins completed`}
+            />
+          )}
+        </KpiTile>
+
+        {/* Never a link — there is no drill-down this aggregate can offer (agents.md §5.6 / R3). */}
+        <KpiTile label="On track">
+          {overview.on_track.suppressed ? (
+            <SuppressedNotice statusLabel={overview.on_track.status_label} />
+          ) : (
+            <KpiStat
+              value={overview.on_track.rate === null ? "—" : formatPercent(overview.on_track.rate)}
+              caption={`${formatHeadcount(overview.on_track.population_headcount)} signed-up workers with a start date`}
+            />
+          )}
+        </KpiTile>
+
+        <KpiTile label="Time saved">
+          {/* The one figure on this strip that carries its unit inside the value rather than in
+              the caption — see `KpiStat`'s `emphasis` for why that needs a smaller step. */}
           <KpiStat
-            value={
-              overview.checkin_completion.rate === null
-                ? "—"
-                : formatPercent(overview.checkin_completion.rate)
-            }
-            caption={`${formatHeadcount(overview.checkin_completion.completed_checkins)} of ${formatHeadcount(overview.checkin_completion.required_checkins)} check-ins completed`}
+            emphasis="compact"
+            value={`${formatHeadcount(overview.time_saved_minutes_per_week)} min/week`}
+            caption={`Estimated across ${formatHeadcount(overview.enrolled_headcount)} enrolled new hires`}
           />
-        )}
-      </KpiTile>
+        </KpiTile>
+      </div>
 
-      {/* Never a link — there is no drill-down this aggregate can offer (agents.md §5.6 / R3). */}
-      <KpiTile label="On track">
-        {overview.on_track.suppressed ? (
-          <SuppressedNotice statusLabel={overview.on_track.status_label} />
-        ) : (
-          <KpiStat
-            value={overview.on_track.rate === null ? "—" : formatPercent(overview.on_track.rate)}
-            caption={`${formatHeadcount(overview.on_track.population_headcount)} signed-up workers with a start date`}
-          />
-        )}
-      </KpiTile>
+      {/*
+        The signals panel, on its own row and the full width of the page.
 
+        It was the sixth cell of a three-column grid: five construct meters stacked inside a tile
+        sized for a single number — the tallest thing on the screen, and the one that most has to
+        be read as a set. Given the whole width the five sit side by side, which is how a person
+        notices that one of them is amber.
+
+        Still one link to `/signals`, still labelled "Adjustment signals". The tile shell is
+        unchanged; only the room it has been given.
+      */}
       <KpiTile label="Adjustment signals" href="/signals">
-        <ul aria-label="Adjustment signals by construct" className="flex list-none flex-col gap-12 p-[0]">
+        <ul
+          aria-label="Adjustment signals by construct"
+          className="grid list-none grid-cols-1 gap-12 p-[0] sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5"
+        >
           {overview.adjustment_signals.constructs.map((construct) => (
-            <li key={construct.construct_id}>
+            <li
+              key={construct.construct_id}
+              className="rounded-control bg-surface-warm-gray px-16 py-12"
+            >
               <TrafficLightMeter
                 label={humanizeConstructId(construct.construct_id)}
                 band={construct.band}
@@ -392,13 +434,6 @@ function OverviewTiles({ overview }: { readonly overview: OverviewResponse }) {
             </li>
           ))}
         </ul>
-      </KpiTile>
-
-      <KpiTile label="Time saved">
-        <KpiStat
-          value={`${formatHeadcount(overview.time_saved_minutes_per_week)} min/week`}
-          caption={`Estimated across ${formatHeadcount(overview.enrolled_headcount)} enrolled new hires`}
-        />
       </KpiTile>
     </div>
   );

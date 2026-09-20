@@ -25,3 +25,17 @@
     font-family: var(--font-core);
   }
 }
+
+/*
+ * Forced-colors fallback for the masked app mark (`src/components/brand-mark.tsx`).
+ *
+ * The mark takes its shape from a CSS mask and its colour from `background-color`. Windows High
+ * Contrast overrides author background colours, which for a masked element means the shape is
+ * cut out of nothing and the mark disappears. `CanvasText` is a system colour keyword — not a
+ * design value — so it is both the correct answer here and invisible to `lint:tokens`.
+ */
+@media (forced-colors: active) {
+  [data-brand-mark] {
+    background-color: CanvasText;
+  }
+}

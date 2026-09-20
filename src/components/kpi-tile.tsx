@@ -58,6 +58,8 @@ export function KpiTile({ label, href, children }: KpiTileProps) {
   return <div className={BASE_CLASS}>{body}</div>;
 }
 
+export type KpiStatEmphasis = "stat" | "compact";
+
 export interface KpiStatProps {
   /** Preformatted for display — this component does no rounding or unit conversion of its own;
    * see `(dashboard)/page.tsx`'s own `formatPercent`/`formatHeadcount` for that. */
@@ -66,14 +68,33 @@ export interface KpiStatProps {
    * only for the one case with nothing sensible to add (`percent_signed_up` with zero enrolled —
    * see the call site). */
   readonly caption?: string;
+  /**
+   * How big the figure is set.
+   *
+   * `stat` (44/800) is the design system's dashboard-stat step and the right answer for a bare
+   * number: "175", "92%". `compact` (28/700) is for a figure that carries its unit inside it —
+   * "208 min/week" — which is a different typographic object and does not fit the same box. At
+   * 44 it overran its tile in a six-across strip; at 28 it sits on one line beside neighbours
+   * that are still set at 44, which reads as emphasis rather than error.
+   *
+   * Deliberately a prop rather than a length check on `value`: a rule like "shrink past nine
+   * characters" would silently reformat a genuinely large headcount, and the thing that actually
+   * differs here is not the length but whether the unit is part of the number.
+   */
+  readonly emphasis?: KpiStatEmphasis;
 }
+
+const STAT_CLASS: Readonly<Record<KpiStatEmphasis, string>> = {
+  stat: "text-stat font-extrabold",
+  compact: "text-display-2",
+};
 
 /** The plain-number half of a `KpiTile`'s body — `enrolled_headcount`, `percent_signed_up`, and
  * the non-suppressed branch of `checkin_completion`/`on_track` all render one of these. */
-export function KpiStat({ value, caption }: KpiStatProps) {
+export function KpiStat({ value, caption, emphasis = "stat" }: KpiStatProps) {
   return (
-    <div className="flex flex-col gap-4">
-      <p className="text-stat font-extrabold text-text-primary">{value}</p>
+    <div className="flex min-w-[0] flex-col gap-4">
+      <p className={`min-w-[0] text-text-primary ${STAT_CLASS[emphasis]}`}>{value}</p>
       {caption !== undefined ? <p className="text-meta text-text-secondary">{caption}</p> : null}
     </div>
   );

@@ -85,6 +85,7 @@ import { useEffect, useState } from "react";
 
 import { ApiError, CLIENT_ERROR_CODES, getSession } from "@/api/client";
 import { humanizeConstructId } from "@/components/checkin-question-card";
+import { AppPage } from "@/components/ui/app-page";
 import { Badge } from "@/components/ui/badge";
 import type { BadgeTone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -93,6 +94,8 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Modal } from "@/components/ui/modal";
 import { PageHeader } from "@/components/ui/page-header";
 import { PageSkeleton } from "@/components/ui/skeleton";
+import { TabPanel, Tabs } from "@/components/ui/tabs";
+import type { TabItem } from "@/components/ui/tabs";
 import { env } from "@/env";
 
 /* -------------------------------------------------------------------------------------------
@@ -429,11 +432,73 @@ function NudgeCard({ nudge, actionState, onApprove, onDismiss }: NudgeCardProps)
   );
 }
 
+/**
+ * One nudge in the list beside the detail.
+ *
+ * Deliberately three short lines and no body: the point of a list is to let someone pick, and a
+ * list that shows the whole of each item is not a list, it is the stack this screen used to be.
+ * The drafted title carries the meaning, the site says where, the date says how stale.
+ *
+ * A real `<button>` with `aria-current`, not a clickable row: it is keyboard-reachable, it says
+ * which one is showing, and `aria-current` is the same word the rail uses for the same idea.
+ */
+function NudgeListRow({
+  nudge,
+  selected,
+  onSelect,
+}: {
+  readonly nudge: Nudge;
+  readonly selected: boolean;
+  readonly onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-current={selected ? "true" : undefined}
+      className={[
+        "flex w-full min-w-[0] flex-col items-start gap-4 rounded-control px-16 py-12 text-left",
+        "transition-colors duration-[var(--duration-fast)] ease-standard",
+        "focus-visible:outline-hidden focus-visible:inset-shadow-focus-plum",
+        selected
+          ? "bg-surface-plum-tint inset-shadow-plum-tint"
+          : "bg-surface-card hover:bg-surface-warm-gray",
+      ].join(" ")}
+    >
+      <span className="w-full truncate text-label font-bold text-text-primary">
+        {nudge.drafted_title}
+      </span>
+      <span className="w-full truncate text-meta text-text-secondary">
+        {nudge.site_name} · {humanizeConstructId(nudge.construct_id)}
+      </span>
+      <span className="w-full truncate text-meta text-text-tertiary">{dateCaptionFor(nudge)}</span>
+    </button>
+  );
+}
+
 /* -------------------------------------------------------------------------------------------
- * Grouping — one section per status, in workflow order, empty sections dropped
+ * Grouping — one tab per status, in workflow order
  * ---------------------------------------------------------------------------------------- */
 
 const STATUS_ORDER: readonly NudgeStatus[] = ["pending", "draft", "approved", "sent", "dismissed"];
+
+/** Tab labels. Shorter than `SECTION_TITLE` because a tab is a label, not a sentence. */
+const TAB_LABEL: Readonly<Record<NudgeStatus, string>> = {
+  pending: "Needs review",
+  draft: "Drafting",
+  approved: "Approved",
+  sent: "Sent",
+  dismissed: "Dismissed",
+};
+
+/** What an empty tab says. Never "nothing here" — each of these is a different fact. */
+const TAB_EMPTY: Readonly<Record<NudgeStatus, string>> = {
+  pending: "Nothing is waiting on you right now.",
+  draft: "Kayla is not drafting anything at the moment.",
+  approved: "Nothing has been approved and not yet sent.",
+  sent: "Nothing has been sent to a site yet.",
+  dismissed: "Nothing has been dismissed.",
+};
 
 const SECTION_TITLE: Readonly<Record<NudgeStatus, string>> = {
   pending: "Needs your review",
@@ -480,6 +545,24 @@ export default function ActionsPage() {
    * to be sent.
    */
   const [pendingDismissal, setPendingDismissal] = useState<Nudge | null>(null);
+  /**
+   * Which status tab is showing, and which nudge in it is open.
+   *
+   * `pending` always opens first, even when it is empty. "Nothing is waiting on you" is the most
+   * useful thing this screen can say, and landing on whichever tab happens to be non-empty would
+   * mean the page showed you a different thing every visit.
+   *
+   * Local state, not the URL: `(dashboard)/__tests__/no-individual-care-usage.test.tsx` renders
+   * every dashboard page with a `next/navigation` mock that has no `useSearchParams`.
+   */
+  const [tab, setTab] = useState<NudgeStatus>("pending");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  /** Changing tab drops the pinned selection — see `selected` below for why it is pinned. */
+  function selectTab(next: NudgeStatus) {
+    setTab(next);
+    setSelectedId(null);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -505,6 +588,13 @@ export default function ActionsPage() {
    * nudge (this task's own firm spec), so this always renders the server's own state, never a
    * client-guessed one. */
   async function handleAction(nudge: Nudge, action: NudgeAction) {
+    // Pin it before the status changes. Approving or dismissing moves a nudge out of the tab it
+    // is listed in, and the detail pane resolves against the whole set rather than the tab (see
+    // `selected`), so pinning here is what keeps the thing you just acted on open in front of
+    // you — with its new badge and no buttons — instead of silently disappearing. Without this,
+    // a nudge that was showing only because it was first in the list would vanish on success and
+    // leave no evidence the action landed.
+    setSelectedId(nudge.id);
     setActionStates((current) => ({ ...current, [nudge.id]: { kind: "working", action } }));
     try {
       const updated = action === "approve" ? await approveNudge(nudge.id) : await dismissNudge(nudge.id);
@@ -530,16 +620,45 @@ export default function ActionsPage() {
     }
   }
 
-  const sections = state.status === "loaded" ? groupByStatus(state.nudges) : null;
+  const nudges = state.status === "loaded" ? state.nudges : [];
+  const sections = groupByStatus(nudges);
+  const inTab = sections[tab];
+  /**
+   * The nudge in the detail pane.
+   *
+   * Resolved against **every** nudge rather than only the ones in this tab, and that is the whole
+   * of how approving and dismissing feel right. Acting on a nudge changes its status, so it
+   * leaves the tab you are triaging in — but it stays open beside the list, now showing its new
+   * badge and no buttons, so you can see that the thing you just did actually happened. The list
+   * has already moved on to what is left.
+   *
+   * Switching tabs clears the id (see `selectTab`), so a nudge from another tab can never be the
+   * one showing. With no id, the first in the tab opens: a triage screen should not make you
+   * click once before it shows you anything.
+   */
+  const selected = nudges.find((nudge) => nudge.id === selectedId) ?? inTab[0] ?? null;
+
+  const tabs: readonly TabItem<NudgeStatus>[] = STATUS_ORDER.map((status) => ({
+    key: status,
+    label: TAB_LABEL[status],
+    count: sections[status].length,
+  }));
 
   return (
-    <div className="mx-auto flex w-full max-w-5xl flex-col gap-24 p-32">
-      <PageHeader
-        eyebrow="Actions"
-        title="Actions"
-        description="AI-drafted nudges for a site’s leadership, generated from that site’s adjustment signals. Nothing is sent to anyone until you approve it here."
-      />
-
+    <AppPage
+      header={
+        <PageHeader
+          eyebrow="Actions"
+          title="Actions"
+          description="AI-drafted nudges for a site’s leadership, generated from that site’s adjustment signals. Nothing is sent to anyone until you approve it here."
+        />
+      }
+      tabs={
+        nudges.length > 0 ? (
+          <Tabs items={tabs} activeKey={tab} onChange={selectTab} label="Filter nudges by status" />
+        ) : undefined
+      }
+    >
       {state.status === "loading" ? <PageSkeleton label="Loading Actions…" /> : null}
 
       {state.status === "error" ? (
@@ -553,43 +672,73 @@ export default function ActionsPage() {
       ) : null}
 
       {state.status === "loaded" ? (
-        state.nudges.length === 0 ? (
+        nudges.length === 0 ? (
           <EmptyState
             icon={<ClipboardCheckGlyph />}
             title="Nothing to review"
             description="Kayla drafts a nudge on its own when a site’s adjustment signal moves into the amber or red band. Until then there is nothing waiting on you — this page filling up is a signal in itself."
           />
         ) : (
-          <div className="flex flex-col gap-32">
-            {STATUS_ORDER.map((status) => {
-              const nudgesForStatus = sections?.[status] ?? [];
-              if (nudgesForStatus.length === 0) return null;
-              const subtitle = SECTION_SUBTITLE[status];
-              return (
-                <section key={status} className="flex flex-col gap-16">
-                  <div className="flex flex-col gap-4">
-                    <h2 className="text-card-title font-extrabold text-text-primary">
-                      {SECTION_TITLE[status]}
-                    </h2>
-                    {subtitle !== undefined ? (
-                      <p className="text-copy text-text-secondary">{subtitle}</p>
-                    ) : null}
-                  </div>
-                  <div className="flex flex-col gap-16">
-                    {nudgesForStatus.map((nudge) => (
-                      <NudgeCard
-                        key={nudge.id}
-                        nudge={nudge}
-                        actionState={actionStates[nudge.id] ?? IDLE_ACTION_STATE}
-                        onApprove={() => void handleAction(nudge, "approve")}
-                        onDismiss={() => setPendingDismissal(nudge)}
-                      />
-                    ))}
-                  </div>
-                </section>
-              );
-            })}
-          </div>
+          <TabPanel tabKey={tab} activeKey={tab}>
+            {inTab.length === 0 && selected === null ? (
+              <EmptyState
+                icon={<ClipboardCheckGlyph />}
+                title={SECTION_TITLE[tab]}
+                description={TAB_EMPTY[tab]}
+              />
+            ) : (
+              /*
+                List beside detail, rather than every nudge at full height one after another.
+
+                A nudge's body is drafted prose of no fixed length, so five of them used to be
+                five screens — and the approve/dismiss buttons, the only reason to be on this
+                page, were at the bottom of each. Now the list is the whole of what there is to
+                triage, and the one you pick is open beside it with its controls in view.
+              */
+              <div className="flex flex-col gap-16 lg:flex-row lg:items-start">
+                <div className="flex flex-col gap-8 lg:w-[calc(var(--spacing-80)*5)] lg:shrink-0">
+                  {SECTION_SUBTITLE[tab] === undefined ? null : (
+                    <p className="text-copy text-text-secondary">{SECTION_SUBTITLE[tab]}</p>
+                  )}
+                  {inTab.length === 0 ? (
+                    // Emptied by the action you just took, with that nudge still open beside
+                    // this. A page-level empty state here would wipe out the thing you are
+                    // looking at to tell you the list is short.
+                    <p className="rounded-card border border-hairline-lilac bg-surface-card p-16 text-copy text-text-secondary">
+                      {TAB_EMPTY[tab]}
+                    </p>
+                  ) : (
+                    <ul
+                      aria-label={`${SECTION_TITLE[tab]} nudges`}
+                      className="flex list-none flex-col gap-4 rounded-card border border-hairline-lilac bg-surface-card p-8 shadow-elevation-card"
+                    >
+                      {inTab.map((nudge) => (
+                        <li key={nudge.id}>
+                          <NudgeListRow
+                            nudge={nudge}
+                            selected={selected !== null && nudge.id === selected.id}
+                            onSelect={() => setSelectedId(nudge.id)}
+                          />
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+
+                <div className="min-w-[0] flex-1">
+                  {selected === null ? null : (
+                    <NudgeCard
+                      key={selected.id}
+                      nudge={selected}
+                      actionState={actionStates[selected.id] ?? IDLE_ACTION_STATE}
+                      onApprove={() => void handleAction(selected, "approve")}
+                      onDismiss={() => setPendingDismissal(selected)}
+                    />
+                  )}
+                </div>
+              </div>
+            )}
+          </TabPanel>
         )
       ) : null}
 
@@ -629,7 +778,7 @@ export default function ActionsPage() {
           signal moves again.
         </p>
       </Modal>
-    </div>
+    </AppPage>
   );
 }
 

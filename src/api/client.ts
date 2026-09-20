@@ -162,6 +162,14 @@ export class ApiError extends Error {
 let SESSION: ActiveSession | null = null;
 
 /**
+ * The one `POST /auth/session` currently in the air, if any — see `restoreSessionOnce`.
+ *
+ * Lives beside `SESSION` rather than in the hook that consumes it so that `clearSession` can drop
+ * both together, and so that every test which already resets the session store resets this too.
+ */
+let inFlightRestore: Promise<ActiveSession | null> | null = null;
+
+/**
  * Adopt a session returned by `/auth/login`, `/auth/signup/set-password` or
  * `/orgs/signup/complete`. Memory only, and **minus the refresh token** — see `ActiveSession`.
  */
@@ -184,9 +192,16 @@ export function getSession(): ActiveSession | null {
   return SESSION;
 }
 
-/** Forget the session. Called on sign-out, and whenever a credential must not be kept. */
+/**
+ * Forget the session. Called on sign-out, and whenever a credential must not be kept.
+ *
+ * Also drops any restore still in flight (see `restoreSessionOnce`). Forgetting the session and
+ * then adopting the answer to a question asked before it was forgotten would sign a person back
+ * in a moment after they pressed "Sign out".
+ */
 export function clearSession(): void {
   SESSION = null;
+  inFlightRestore = null;
 }
 
 /**
@@ -225,6 +240,44 @@ export async function restoreSession(options: RequestOptions = {}): Promise<Acti
     clearSession();
     return null;
   }
+}
+
+/**
+ * `restoreSession`, but at most one request at a time.
+ *
+ * --------------------------------------------------------------------------------------------
+ * What this exists to stop, and what it used to be
+ * --------------------------------------------------------------------------------------------
+ * `POST /auth/session` spends a single-use cookie, so calling it twice means the second call
+ * presents a token the first already spent — which the backend reads, correctly, as a stolen
+ * token and answers by revoking the whole refresh family. Exactly one call is correctness, not
+ * an optimisation.
+ *
+ * That was previously enforced in `useAuthenticatedSession` with a `useRef(false)` guard that
+ * made the *second* caller do nothing at all. Under React Strict Mode — which `next dev` turns
+ * on — that deadlocked the dashboard:
+ *
+ *   mount        -> guard set, restore starts
+ *   cleanup      -> the first subscriber marks itself dead (Strict Mode's simulated unmount)
+ *   mount again  -> guard already set, so this mount subscribes to nothing
+ *   restore ends -> the only subscriber left is the dead one, so no state update ever happens
+ *
+ * The dashboard sat on "Loading your dashboard…" forever in `npm run dev`, while the production
+ * build was fine because Strict Mode does not double-invoke there. The test suite could not see
+ * it either: `@testing-library/react` does not render in Strict Mode.
+ *
+ * Deduplicating the promise instead keeps the one-request guarantee and lets every caller learn
+ * how it ended. The second mount joins the request already in flight rather than starting
+ * another or subscribing to nothing.
+ *
+ * The slot is released once the request settles, so a later attempt — after a restore that found
+ * no cookie, say — asks again rather than replaying a stale answer for the life of the tab.
+ */
+export function restoreSessionOnce(options: RequestOptions = {}): Promise<ActiveSession | null> {
+  inFlightRestore ??= restoreSession(options).finally(() => {
+    inFlightRestore = null;
+  });
+  return inFlightRestore;
 }
 
 /* -------------------------------------------------------------------------------------------

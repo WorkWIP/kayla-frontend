@@ -24,26 +24,39 @@
  * --------------------------------------------------------------------------------------------
  * Structure, per the design system's own spec
  * --------------------------------------------------------------------------------------------
- *   brand block  (40 plum disc + initials, org name, signed-in identity)
+ *   brand block  (the app mark — which is also the collapse control — org name, identity)
  *   nav items    (the seven real destinations)
  *   ...
- *   footer       (collapse toggle, Settings, Sign out) — pinned to the bottom
+ *   footer       (Settings, Sign out) — pinned to the bottom
  *
  * Settings sits in the footer rather than in the item list because `SidebarNavigation.prompt.md`
  * says so in as many words: "Footer items (Settings, Sign out) pin to the bottom." It is still a
  * real `<a href="/settings">` carrying `aria-current`, so nothing about how it is reached or
  * announced changed — only where it sits.
  *
+ * The brand block is a `KH` plum disc no longer. `SidebarNavigation.prompt.md` said "there is no
+ * logo file, so keep it as initials", and that was true; a real mark now ships at
+ * `kb/design_system/assets/brand/kayla-logo.png`, so the disc gives way to it (see
+ * `components/brand-mark.tsx` for why it renders as a plum mask rather than the supplied teal).
+ * `brandInitialsFor` is kept and still exported: it remains the honest fallback for anywhere a
+ * customer has to be identified by name rather than by our mark.
+ *
  * --------------------------------------------------------------------------------------------
  * Responsive behaviour (new — this rail had none at all, and the dashboard was unusable on a
  * phone)
  * --------------------------------------------------------------------------------------------
- *   >= lg (1024)   full rail. The collapse toggle applies here and only here.
- *   md .. lg       icon-only rail, 64 wide. Labels stay in the DOM as `sr-only`, never dropped:
- *                  an icon with no accessible name is not a link, it is a puzzle.
+ *   >= md (768)    a real rail, and the remembered collapse preference decides its width: 232
+ *                  with labels, or 64 icons-only. Labels stay in the DOM as `sr-only` when the
+ *                  rail is narrow, never dropped — an icon with no accessible name is not a
+ *                  link, it is a puzzle.
  *   < md (768)     off-canvas. The rail is `hidden` (not merely translated off-screen, so its
  *                  links cannot be reached by Tab while invisible) until the top bar's hamburger
- *                  opens it, and then it is a fixed overlay above a dismiss backdrop.
+ *                  opens it, and then it is a fixed overlay above a dismiss backdrop, always in
+ *                  its expanded shape.
+ *
+ * The preference used to apply at `lg` and up only, with `md`..`lg` forced to icons. That made
+ * the toggle a no-op on exactly the displays where a narrow rail buys the most, so it now bites
+ * everywhere there is a rail to narrow.
  *
  * `mobileOpen`/`onMobileClose` are owned by `dashboard-shell.tsx`, because the hamburger that
  * opens the drawer lives in the top bar, not in the drawer it opens. Both are optional so this
@@ -70,6 +83,7 @@ import type { ReactElement } from "react";
 
 import { apiRequest, clearSession } from "@/api/client";
 import type { UserRole } from "@/api/client";
+import { BrandMark } from "@/components/brand-mark";
 import { LOGIN_ROUTE } from "@/lib/session";
 
 export interface SidebarNavUser {
@@ -359,28 +373,6 @@ const NAV_ICON: Readonly<Record<NavIcon, () => ReactElement>> = {
   actions: ClipboardCheckGlyph,
 };
 
-/** Lucide's `chevron-left` is a mirror of `chevron-right`, drawn as a 180° rotation of the one
- * glyph `Icon.jsx` actually ships rather than a second hand-authored path. */
-function ChevronGlyph({ pointingLeft }: { readonly pointingLeft: boolean }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      width={20}
-      height={20}
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={2}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      className="shrink-0"
-      style={{ transform: pointingLeft ? "rotate(180deg)" : undefined }}
-    >
-      <path d="m9 18 6-6-6-6" />
-    </svg>
-  );
-}
-
 /** Lucide `x` — closes the mobile drawer from inside it. */
 function CloseGlyph() {
   return (
@@ -399,20 +391,29 @@ function CloseGlyph() {
 const RAIL_WIDE = "w-[calc(var(--spacing-64)*3+var(--spacing-40))]";
 
 /**
- * Shared visual treatment for every rail row — nav links, Settings, Sign out, the collapse
- * toggle. Display is deliberately left out: the collapse toggle is `hidden lg:flex` and every
- * other row is `flex`, and two `display` utilities on one element is a coin toss.
+ * The same width at `md` and up. Spelled out rather than built as `` `md:${RAIL_WIDE}` ``
+ * because Tailwind generates a utility only when it finds the whole candidate as literal text in
+ * a source file; an interpolated variant prefix produces the right string at runtime and no CSS
+ * rule to go with it.
+ */
+const RAIL_WIDE_MD = "md:w-[calc(var(--spacing-64)*3+var(--spacing-40))]";
+
+/**
+ * Shared visual treatment for every rail row — nav links, Settings, Sign out. Display is
+ * deliberately left out so each call site can pick it; every row is `flex` today, but keeping
+ * `display` out of a shared string is what stopped two of them fighting over it before.
  */
 function railItemClass(collapsed: boolean, active: boolean): string {
   return [
     "min-h-48 items-center rounded-control font-core transition-colors",
     "duration-[var(--duration-fast)] ease-standard",
     "focus-visible:outline-hidden focus-visible:inset-shadow-focus-plum",
-    // Drawer (base) is always the expanded shape; md is always icons-only; lg follows the
-    // remembered collapse preference.
+    // The drawer (base) is always the expanded shape — there is no such thing as an icons-only
+    // overlay. From `md` up the remembered preference decides, which is the whole point of
+    // moving the control onto the mark: a toggle that only bit at `lg` was a toggle most
+    // people never saw work.
     "w-full justify-start gap-12 px-12",
-    "md:w-48 md:justify-center md:gap-[0] md:px-[0]",
-    collapsed ? "" : "lg:w-full lg:justify-start lg:gap-12 lg:px-12",
+    collapsed ? "md:w-48 md:justify-center md:gap-[0] md:px-[0]" : "",
     active
       ? "bg-surface-plum-tint font-bold text-text-link"
       : "font-medium text-text-secondary hover:bg-surface-warm-gray",
@@ -422,15 +423,13 @@ function railItemClass(collapsed: boolean, active: boolean): string {
 }
 
 /**
- * A row's label. Always in the DOM; visually hidden exactly where the rail is icons-only.
- * `lg:whitespace-nowrap` is not redundant: `not-sr-only` resets `white-space` to `normal`, and
- * it wins over the base `whitespace-nowrap` by virtue of living in a media query.
+ * A row's label. Always in the DOM; visually hidden exactly where the rail is icons-only — never
+ * dropped, because an icon with no accessible name is not a link, it is a puzzle. Seven tests
+ * look these labels up by name (`getByRole("link", { name: "Knowledge Base" })`), and `sr-only`
+ * still contributes an accessible name where `aria-hidden` or removal would not.
  */
 function railLabelClass(collapsed: boolean): string {
-  return [
-    "whitespace-nowrap text-label md:sr-only",
-    collapsed ? "" : "lg:not-sr-only lg:whitespace-nowrap",
-  ]
+  return ["whitespace-nowrap text-label", collapsed ? "md:sr-only" : ""]
     .filter((part) => part.length > 0)
     .join(" ");
 }
@@ -522,17 +521,20 @@ export function SidebarNav({ user, mobileOpen = false, onMobileClose }: SidebarN
       <nav
         aria-label="Kayla Health dashboard"
         className={[
-          "flex-col justify-between rounded-xl border border-hairline-sidebar bg-surface-sidebar",
-          "py-24 shadow-raised",
+          // Flush to the viewport edge and full height: the rail *is* the left edge of the
+          // application now, not a floating card sitting on a padded page. So: no outer radius,
+          // no drop shadow, and one hairline on the side that meets the content.
+          "flex-col justify-between border-r border-hairline-sidebar bg-surface-sidebar py-24",
           // Below md the rail is either an overlay or genuinely absent — never merely shifted
           // off-screen, which would leave its links in the tab order behind the page.
           mobileOpen
-            ? `fixed top-[0] bottom-[0] left-[0] z-50 flex ${RAIL_WIDE} items-stretch overflow-y-auto px-12`
+            ? `fixed top-[0] bottom-[0] left-[0] z-50 flex ${RAIL_WIDE} items-stretch overflow-y-auto px-12 shadow-panel`
             : "hidden md:flex",
-          // md and up: static, icons-only, 64 wide.
-          "md:static md:h-full md:w-64 md:items-center md:overflow-visible md:px-[0]",
-          // lg and up: the full rail, unless the viewer collapsed it.
-          collapsed ? "" : "lg:w-[calc(var(--spacing-64)*3+var(--spacing-40))] lg:items-stretch lg:px-12",
+          // From md up the rail is static and the remembered preference decides its width.
+          "md:static md:h-full md:overflow-visible",
+          collapsed
+            ? "md:w-64 md:items-center md:px-[0]"
+            : `${RAIL_WIDE_MD} md:items-stretch md:px-12`,
         ]
           .filter((part) => part.length > 0)
           .join(" ")}
@@ -540,23 +542,39 @@ export function SidebarNav({ user, mobileOpen = false, onMobileClose }: SidebarN
         <div className="flex flex-col gap-24">
           <div
             className={[
-              "flex items-center gap-12",
-              "justify-start px-4 md:justify-center md:px-[0]",
-              collapsed ? "" : "lg:justify-start lg:px-4",
+              "flex items-center gap-12 justify-start px-4",
+              collapsed ? "md:justify-center md:px-[0]" : "",
             ]
               .filter((part) => part.length > 0)
               .join(" ")}
           >
-            <span
-              aria-hidden="true"
-              className="flex size-40 shrink-0 items-center justify-center rounded-full bg-bg-inverse font-core text-label font-extrabold text-text-inverse"
+            {/*
+              The app mark, and the control that collapses the rail — one element, because that
+              is the affordance a person reaches for. The old control was a chevron row pinned in
+              the footer, below Settings and Sign out, visible only at `lg`: a long way from the
+              thing it acted on, and invisible at the width where a narrow rail helps most.
+
+              It wraps the mark *only*, not the organisation name beside it. Wrapping both would
+              make the button's accessible name the customer's name — "Okemah Community Care,
+              button" — which says nothing about what pressing it does. The identity stays text;
+              the control keeps a name that is a verb.
+
+              `aria-expanded` describes the rail this button controls, so the state is announced
+              rather than inferred from a label that happens to change.
+            */}
+            <button
+              type="button"
+              onClick={toggleCollapsed}
+              aria-expanded={!collapsed}
+              aria-label={collapsed ? "Expand navigation" : "Collapse navigation"}
+              className="flex size-48 shrink-0 items-center justify-center rounded-control transition-colors duration-[var(--duration-fast)] ease-standard hover:bg-surface-warm-gray focus-visible:outline-hidden focus-visible:inset-shadow-focus-plum"
             >
-              {brandInitialsFor(orgName)}
-            </span>
+              <BrandMark size="md" />
+            </button>
             <div
               className={[
-                "flex min-w-[0] flex-col gap-4 md:sr-only",
-                collapsed ? "" : "lg:not-sr-only",
+                "flex min-w-[0] flex-col gap-4",
+                collapsed ? "md:sr-only" : "",
               ]
                 .filter((part) => part.length > 0)
                 .join(" ")}
@@ -593,21 +611,6 @@ export function SidebarNav({ user, mobileOpen = false, onMobileClose }: SidebarN
         {/* Footer, pinned to the bottom by the root's `justify-between` —
             `SidebarNavigation.prompt.md`: "Footer items (Settings, Sign out) pin to the bottom." */}
         <ul className="flex list-none flex-col gap-4 p-[0]">
-          <li>
-            {/* Collapsing only means anything where there is a full rail to collapse, so the
-                control only exists at lg. */}
-            <button
-              type="button"
-              onClick={toggleCollapsed}
-              aria-pressed={collapsed}
-              className={`hidden lg:flex ${railItemClass(collapsed, false)}`}
-            >
-              <ChevronGlyph pointingLeft={!collapsed} />
-              <span className={railLabelClass(collapsed)}>
-                {collapsed ? "Expand navigation" : "Collapse navigation"}
-              </span>
-            </button>
-          </li>
           <li>{renderNavLink(SETTINGS_ITEM)}</li>
           <li>
             <button

@@ -12,6 +12,20 @@
  * `SESSION` docstring) — there is nothing a server render could fetch with. `DashboardShell`
  * (this route's layout) has already confirmed a session exists before this page ever mounts, so
  * this file's only job is to fetch and render, not to guard authentication a second time.
+ *
+ * --------------------------------------------------------------------------------------------
+ * Layout
+ * --------------------------------------------------------------------------------------------
+ * `AppPage` supplies the frame — the same frame, at the same width, as every other screen. The
+ * grid keeps going past `lg`: three columns was the old cap because the page itself stopped at
+ * roughly a thousand units, and a cohort card is two short lines, so six across on a wide
+ * display is dense rather than cramped.
+ *
+ * The search box is the one real addition. "Ensure capability to search for a record with a
+ * variety of keywords" is the first recommendation in koruux's survey of patient look-up lists,
+ * and an organisation with two years of monthly cohorts has two dozen of them with nothing but
+ * the eye to find one. It filters in memory: `GET /cohorts` returns the whole list unpaged, so
+ * there is nothing to ask the server for.
  */
 
 import { useEffect, useState } from "react";
@@ -19,9 +33,11 @@ import { useEffect, useState } from "react";
 import { ApiError, CLIENT_ERROR_CODES, apiRequest } from "@/api/client";
 import type { components } from "@/api/generated";
 import { CohortCard } from "@/components/cohort-card";
+import { AppPage } from "@/components/ui/app-page";
 import { LinkButton } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
+import { SearchField } from "@/components/ui/search-field";
 import { PageSkeleton } from "@/components/ui/skeleton";
 
 type CohortSummary = components["schemas"]["CohortSummary"];
@@ -46,8 +62,14 @@ function messageFor(error: unknown): string {
   return GENERIC_FAILURE;
 }
 
+/** Case-insensitive substring match on the one field a cohort has to be found by. */
+function matchesQuery(cohort: CohortSummary, query: string): boolean {
+  return cohort.label.toLowerCase().includes(query.trim().toLowerCase());
+}
+
 export default function CohortsPage() {
   const [state, setState] = useState<LoadState>({ status: "loading" });
+  const [query, setQuery] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -67,15 +89,33 @@ export default function CohortsPage() {
     };
   }, []);
 
-  return (
-    <div className="mx-auto flex w-full max-w-5xl flex-col gap-24 p-32">
-      <PageHeader
-        eyebrow="Cohorts"
-        title="Cohorts"
-        description="Grouped by the calendar month each worker started. A roster row with no start date is pooled into one cohort until the file is corrected."
-        actions={<LinkButton href="/cohorts/upload">Upload roster</LinkButton>}
-      />
+  const cohorts = state.status === "loaded" ? state.cohorts : [];
+  const visible = cohorts.filter((cohort) => matchesQuery(cohort, query));
+  // The search box only earns its place once there is enough to search. On an empty org it would
+  // be a control that filters nothing, sitting above the message explaining there is nothing yet.
+  const searchable = state.status === "loaded" && cohorts.length > 0;
 
+  return (
+    <AppPage
+      header={
+        <PageHeader
+          eyebrow="Cohorts"
+          title="Cohorts"
+          description="Grouped by the calendar month each worker started. A roster row with no start date is pooled into one cohort until the file is corrected."
+          actions={<LinkButton href="/cohorts/upload">Upload roster</LinkButton>}
+        />
+      }
+      toolbar={
+        searchable ? (
+          <SearchField
+            label="Search cohorts by name"
+            placeholder="Search cohorts…"
+            value={query}
+            onValueChange={setQuery}
+          />
+        ) : undefined
+      }
+    >
       {state.status === "loading" ? <PageSkeleton label="Loading cohorts…" shape="grid" /> : null}
 
       {state.status === "error" ? (
@@ -97,9 +137,19 @@ export default function CohortsPage() {
         />
       ) : null}
 
-      {state.status === "loaded" && state.cohorts.length > 0 ? (
-        <div className="grid grid-cols-1 gap-16 sm:grid-cols-2 lg:grid-cols-3">
-          {state.cohorts.map((cohort) => (
+      {/* Found nothing is not the same as have nothing, and saying "No cohorts yet" to someone
+          who has thirty of them and a typo in the box would be a lie. */}
+      {searchable && visible.length === 0 ? (
+        <EmptyState
+          icon={<UsersGlyph />}
+          title="No cohort matches that search"
+          description="Cohorts are named for the month their workers started — try a month, or a year."
+        />
+      ) : null}
+
+      {visible.length > 0 ? (
+        <div className="grid grid-cols-1 gap-16 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-6">
+          {visible.map((cohort) => (
             <CohortCard
               key={cohort.id}
               id={cohort.id}
@@ -109,7 +159,7 @@ export default function CohortsPage() {
           ))}
         </div>
       ) : null}
-    </div>
+    </AppPage>
   );
 }
 

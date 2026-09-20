@@ -49,8 +49,21 @@ export interface TrafficLightMeterProps {
 
 export function TrafficLightMeter({ label, band, suppressed, statusLabel }: TrafficLightMeterProps) {
   return (
-    <div className="flex items-center justify-between gap-8">
-      <span className="min-w-[0] truncate text-copy text-text-primary">{label}</span>
+    /*
+      `flex-wrap`, and the label no longer truncates.
+
+      This row is laid out side by side — name on the left, status on the right — which is right
+      until the status is a *sentence*. A suppressed construct's status copy is server-authored
+      and long ("Not enough responses yet to report this"), and in a narrow column it squeezed
+      the name down to "Manag…". A truncated construct name is the one thing on this row that
+      must never be ambiguous: "Manager support" and "Manager…" are not obviously the same
+      construct to someone scanning five of them.
+
+      Wrapping puts the status on its own line when the two cannot share one, and the name keeps
+      its full width either way. Nothing moves in the common case, where the status is two words.
+    */
+    <div className="flex flex-wrap items-center justify-between gap-x-8 gap-y-4">
+      <span className="min-w-[0] text-copy text-text-primary">{label}</span>
       {/* Inlined (not a precomputed boolean) so TypeScript narrows `band` to `SignalBand` in the
           branch below — the whole point of `band: SignalBand | null` in the first place. */}
       {suppressed || band === null ? (

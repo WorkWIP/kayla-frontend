@@ -23,6 +23,7 @@ import { EngagementTrendChart } from "@/components/engagement-trend-chart";
 import { LinkButton } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
+import { AppPage } from "@/components/ui/app-page";
 import { PageHeader } from "@/components/ui/page-header";
 import { PageSkeleton } from "@/components/ui/skeleton";
 
@@ -83,13 +84,15 @@ export default function EngagementPage() {
   }, []);
 
   return (
-    <div className="mx-auto flex w-full max-w-5xl flex-col gap-24 p-32">
-      <PageHeader
-        eyebrow="Engagement"
-        title="Engagement"
-        description="Milestone check-in completion for the organization’s current cohort, days 7 through 90."
-      />
-
+    <AppPage
+      header={
+        <PageHeader
+          eyebrow="Engagement"
+          title="Engagement"
+          description="Milestone check-in completion for the organization’s current cohort, days 7 through 90."
+        />
+      }
+    >
       {state.status === "loading" ? (
         <PageSkeleton label="Loading engagement…" shape="form" count={4} />
       ) : null}
@@ -115,7 +118,7 @@ export default function EngagementPage() {
       {state.status === "loaded" && state.engagement.current_cohort_id !== null ? (
         <EngagementTrend engagement={state.engagement} />
       ) : null}
-    </div>
+    </AppPage>
   );
 }
 

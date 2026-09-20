@@ -67,6 +67,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { NumberField } from "@/components/ui/field";
+import { AppPage } from "@/components/ui/app-page";
 import { PageHeader } from "@/components/ui/page-header";
 import { PageSkeleton } from "@/components/ui/skeleton";
 
@@ -444,7 +445,9 @@ function CostOfTurnoverSection({ card }: { readonly card: CostOfTurnoverReferenc
   return (
     <SectionCard title={card.title} subtitle={card.description}>
       <p className="text-copy font-medium text-text-secondary">{card.formula}</p>
-      <div className="grid grid-cols-2 gap-12 sm:grid-cols-3">
+      {/* Six figures that add up to one argument, so they belong on one line where the page is
+          wide enough to give them one. */}
+      <div className="grid grid-cols-2 gap-12 sm:grid-cols-3 xl:grid-cols-6">
         {stats.map((stat) => (
           <div key={stat.label} className="flex flex-col gap-4 rounded-control bg-surface-warm-gray p-12">
             <span className="text-title font-extrabold text-text-primary">{stat.value}</span>
@@ -499,8 +502,7 @@ export default function SettingsPage() {
 
   if (!isOrgOwner) {
     return (
-      <div className="mx-auto flex w-full max-w-3xl flex-col gap-24 p-32">
-        <PageHeader eyebrow="Settings" title="Settings" />
+      <AppPage header={<PageHeader eyebrow="Settings" title="Settings" />} width="form">
         <div className="flex flex-col gap-4 rounded-card border border-hairline-lilac bg-surface-warm-gray p-16">
           <p className="text-label font-bold text-text-primary">Org owners only.</p>
           <p className="text-copy text-text-secondary">
@@ -509,18 +511,40 @@ export default function SettingsPage() {
             owner on your team for a change here.
           </p>
         </div>
-      </div>
+      </AppPage>
     );
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-24 p-32">
-      <PageHeader
-        eyebrow="Settings"
-        title="Settings"
-        description="Thresholds, admin users, the privacy disclosure workers see, and the cost-of-turnover reference card."
-      />
+    <AppPage
+      header={
+        <PageHeader
+          eyebrow="Settings"
+          title="Settings"
+          description="Thresholds, admin users, the privacy disclosure workers see, and the cost-of-turnover reference card."
+        />
+      }
+      /*
+        Split by what a person came here to *do*, not by what the four endpoints happen to be.
 
+        The main column is the two sections with substance: the thresholds form, which is the only
+        writable thing on this screen, and the cost-of-turnover card, whose six figures want room
+        to sit in one row. The context panel takes the two that are reference — who can sign in,
+        and the sentence workers are shown — both of which read perfectly well in a narrow column.
+
+        All four still render at once. They used to render one under another in a column two
+        thirds this wide, which put the cost card a full screen below the fold on every visit.
+      */
+      aside={
+        state.status === "loaded" ? (
+          <>
+            <AdminUsersSection users={state.data.adminUsers} />
+            <PrivacyDisclosureSection disclosure={state.data.privacyDisclosure} />
+          </>
+        ) : undefined
+      }
+      asideLabel="Organisation reference"
+    >
       {state.status === "loading" ? (
         <PageSkeleton label="Loading Settings…" shape="form" count={4} />
       ) : null}
@@ -544,11 +568,9 @@ export default function SettingsPage() {
               )
             }
           />
-          <AdminUsersSection users={state.data.adminUsers} />
-          <PrivacyDisclosureSection disclosure={state.data.privacyDisclosure} />
           <CostOfTurnoverSection card={state.data.costOfTurnover} />
         </>
       ) : null}
-    </div>
+    </AppPage>
   );
 }

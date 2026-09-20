@@ -54,9 +54,9 @@
  */
 
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
-import { getSession, restoreSession } from "@/api/client";
+import { getSession, restoreSessionOnce } from "@/api/client";
 import type { ActiveSession } from "@/api/client";
 
 /** Where an unauthenticated visitor to a dashboard route is sent. */
@@ -95,18 +95,16 @@ export function useAuthenticatedSession(): SessionState {
   // never produce a `restoring` frame, or every client-side navigation into the dashboard would
   // flash a skeleton over a page that was ready to draw.
   const [state, setState] = useState<SessionState>(fromStore);
-  const asked = useRef(false);
 
   useEffect(() => {
-    if (asked.current || state.status !== "restoring") return;
-    // Set before the call, not after it: Strict Mode's double-mount runs this effect twice in the
-    // same tick, and a second `POST /auth/session` would present a cookie the first call has
-    // already spent — which the backend reads, correctly, as a stolen token and answers by
-    // revoking the entire refresh family.
-    asked.current = true;
+    if (state.status !== "restoring") return;
 
+    // Always subscribe. `restoreSessionOnce` is what keeps this to a single `POST /auth/session`,
+    // so a second mount joins the request already in flight instead of either starting another
+    // one (which would spend a cookie twice) or — the bug this replaced — subscribing to nothing
+    // and leaving the shell loading forever. See that function for the full sequence.
     let live = true;
-    void restoreSession().then((session) => {
+    void restoreSessionOnce().then((session) => {
       if (!live) return;
       setState(session === null ? SIGNED_OUT : { status: "signed-in", session });
     });

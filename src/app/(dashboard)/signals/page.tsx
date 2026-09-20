@@ -82,6 +82,7 @@ import { Badge } from "@/components/ui/badge";
 import { LinkButton } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
+import { AppPage } from "@/components/ui/app-page";
 import { PageHeader } from "@/components/ui/page-header";
 import { PageSkeleton } from "@/components/ui/skeleton";
 
@@ -166,11 +167,23 @@ function ConstructRow({ signal }: { readonly signal: ConstructSignal }) {
   );
 }
 
+/**
+ * One cohort, and the five constructs measured for it.
+ *
+ * The constructs used to stack, which made a cohort card roughly four hundred units tall and a
+ * year of monthly cohorts an afternoon of scrolling. They are a *set* — the question is always
+ * "which of these five is the one that moved" — so they sit side by side and a cohort becomes
+ * one band across the page instead of a screenful.
+ *
+ * The order is the API's, never sorted here: `signals/page.test.tsx` pins the rendered sequence
+ * to the declaration order of `ConstructId`, so that two people reading two cohorts are always
+ * comparing the same column.
+ */
 function CohortCard({ cohort }: { readonly cohort: CohortSignals }) {
   return (
     <Card className="flex flex-col gap-12">
       <p className="text-card-title font-extrabold text-text-primary">{cohort.cohort_label}</p>
-      <div className="flex flex-col gap-8">
+      <div className="grid grid-cols-1 gap-8 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5">
         {cohort.constructs.map((signal) => (
           <ConstructRow key={signal.construct_id} signal={signal} />
         ))}
@@ -230,13 +243,24 @@ export default function SignalsPage() {
   }, []);
 
   return (
-    <div className="mx-auto flex w-full max-w-5xl flex-col gap-24 p-32">
-      <PageHeader
-        eyebrow="Signals"
-        title="Signals"
-        description="Adjustment-signal constructs, aggregated per cohort. No worker is ever named or identifiable on this page — every number here is a cohort-level pattern, never an individual response."
-      />
-
+    <AppPage
+      header={
+        <PageHeader
+          eyebrow="Signals"
+          title="Signals"
+          description="Adjustment-signal constructs, aggregated per cohort. No worker is ever named or identifiable on this page — every number here is a cohort-level pattern, never an individual response."
+        />
+      }
+      /* The legend is reference, not content: you read it once, then you read the cohorts. It
+         used to sit between the heading and the first cohort, which meant scrolling past the
+         key every time you came back to the page. */
+      aside={
+        state.status === "loaded" ? (
+          <ThresholdDisclosure text={state.data.threshold_disclosure} />
+        ) : undefined
+      }
+      asideLabel="How to read these signals"
+    >
       {state.status === "loading" ? <PageSkeleton label="Loading Signals…" /> : null}
 
       {state.status === "error" ? (
@@ -251,8 +275,6 @@ export default function SignalsPage() {
 
       {state.status === "loaded" ? (
         <>
-          <ThresholdDisclosure text={state.data.threshold_disclosure} />
-
           {state.data.cohorts.length === 0 ? (
             <EmptyState
               icon={<ActivityGlyph />}
@@ -269,7 +291,7 @@ export default function SignalsPage() {
           )}
         </>
       ) : null}
-    </div>
+    </AppPage>
   );
 }
 
