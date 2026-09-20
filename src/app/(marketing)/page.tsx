@@ -1,8 +1,7 @@
 import type { Metadata } from "next";
-import Image from "next/image";
 
-import { BRAND_MARK_HEIGHT, BRAND_MARK_SRC, BRAND_MARK_WIDTH } from "@/components/brand-mark";
 import { BrandWordmark } from "@/components/brand-wordmark";
+import { HeroIllustration } from "@/components/hero-illustration";
 import { LinkButton } from "@/components/ui/button";
 
 /**
@@ -68,16 +67,18 @@ import { LinkButton } from "@/components/ui/button";
  * nothing to scroll and no scrollbar appears; on something very short it gives way rather than
  * clipping the buttons, which is the failure mode a fixed-height page otherwise has.
  *
- * The mark is the one thing on this page that is an image. `kb/design_system/readme.md` said
- * "**There is no logo file in the source** … Do not draw a logo — ask for one"; one has since
- * been supplied, so nothing here is drawn or invented. It is shown in its own colours, which is
- * the one place that is right: the application chrome renders it in a single plum ink to stay
- * inside the palette (see `components/brand-mark.tsx`), but a page whose subject *is* the brand
- * should show the brand as it actually is. It is `alt=""` and `aria-hidden`: the wordmark beside
- * it already says "Kayla Health", and a screen reader does not need to hear it twice.
+ * The right half is `HeroIllustration` — the ninety-day journey drawn as a line with its four
+ * milestone check-ins on it, and beside it the two things an employer actually receives. It
+ * replaced the brand mark at size, which filled the same space and said only that there is a
+ * letter K. See that component for why it carries no numerals and no labels.
+ *
+ * The mark still opens the page, as type, in the header wordmark. Below `lg` the illustration is
+ * dropped rather than shrunk: on a phone the copy and the two buttons need the whole width, and
+ * a decoration that pushes the primary action off a non-scrolling screen is worse than no
+ * decoration.
  *
  * Still no photography, no texture, no gradient and no `backdrop-filter` — the design system
- * forbids all four, and the mark at size needs none of them.
+ * forbids all four, and this needs none of them.
  */
 
 const DESCRIPTION =
@@ -159,8 +160,8 @@ export default function LandingPage() {
               inventing a one-off.
             */}
             <h1 className="text-display-2 font-extrabold text-text-primary xl:text-display-1 2xl:text-hero">
-              Onboarding support for frontline healthcare workers — and cohort-level metrics for
-              the employers who hire them.
+              Onboarding support for frontline healthcare workers, and cohort-level metrics for
+              their employers.
             </h1>
 
             <p className="text-body text-text-secondary">
@@ -209,28 +210,14 @@ export default function LandingPage() {
         </div>
 
         {/*
-          The mark, cropped by the window. Hidden below `lg`, where there is no second column to
-          put it in and the copy needs the whole width.
+          The illustration. Hidden below `lg`, where there is no second column to put it in and
+          the copy needs the whole width — see the module docstring.
 
-          The oversize height with `overflow-hidden` on the parent is what does the bleeding: the
-          mark is slightly taller than the space it is given, so the frame trims every edge and it
-          reads as a surface the page sits on rather than a picture placed on the page.
-
-          105 rather than anything larger, and that number is the whole design of this panel. The
-          mark is a letterform; crop it hard and it stops being a K and becomes four abstract
-          strokes, which is decoration rather than branding. This is the most bleed it takes
-          before it stops being legible as the letter.
+          Padded rather than bled: unlike a cropped letterform, this composition means something
+          only when all of it is visible, so the frame gives it room instead of trimming it.
         */}
-        <div className="relative hidden min-w-[0] items-center justify-center overflow-hidden bg-surface-plum-tint lg:flex lg:flex-1">
-          <Image
-            src={BRAND_MARK_SRC}
-            alt=""
-            aria-hidden="true"
-            width={BRAND_MARK_WIDTH}
-            height={BRAND_MARK_HEIGHT}
-            priority
-            className="h-[105%] w-auto max-w-none"
-          />
+        <div className="hidden min-w-[0] items-center justify-center bg-surface-plum-tint p-48 lg:flex lg:flex-1">
+          <HeroIllustration />
         </div>
       </main>
     </div>

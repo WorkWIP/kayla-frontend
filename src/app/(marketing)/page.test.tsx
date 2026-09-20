@@ -22,42 +22,46 @@ afterEach(() => {
 
 describe("the landing page", () => {
   /**
-   * This assertion used to be the opposite one, and the reason it changed is worth recording.
+   * This assertion has now been rewritten twice, and both reasons are worth keeping.
    *
-   * It read "renders the wordmark as type, with no image and no logo file", and required that
-   * neither an `<img>` nor an `<svg>` appear anywhere on the page. That was not an accident and
-   * not over-specification: `kb/design_system/readme.md:294` said "There is no logo file in the
-   * source... Do not draw a logo — ask for one", so any image here would have meant somebody had
-   * drawn one. The `KH` plum disc was the honest stand-in.
+   * It began as "renders the wordmark as type, with no image and no logo file", forbidding any
+   * `<img>` and any `<svg>` anywhere on the page. That was not over-specification:
+   * `kb/design_system/readme.md:294` said "There is no logo file in the source... Do not draw a
+   * logo — ask for one", so an image here would have meant somebody had drawn one.
    *
-   * A logo has since been supplied — `kb/design_system/assets/brand/kayla-logo.png`, copied into
-   * this app at `public/brand/kayla-mark.png` — so the premise no longer holds. The rule it was
-   * protecting still does, and is what this test now pins instead:
+   * A logo was then supplied, so it became "shows the supplied brand mark", pinning a single
+   * decorative `<img>` of that mark at hero size.
    *
-   *   - the only image on the page is that supplied mark, and it is decorative;
-   *   - there is still no `<svg>`, so no illustration has been drawn to go with it;
-   *   - the brand still reads as type, because the mark alone does not name the product.
+   * That mark has now given way to `HeroIllustration`: the hero said only "there is a letter K",
+   * and half the front door is too much to spend on saying that. What the page shows instead is
+   * an abstract drawing of the ninety-day journey and the two things an employer receives from
+   * it. The rules that survive all three versions, and that this now pins:
    *
-   * If this ever fails because a second image appeared, the question to ask is not "how do I
-   * make the count pass" but "what got drawn, and who asked for it".
+   *   - the brand still reads as *type*. `BrandWordmark` sets the name beside the mark, which is
+   *     a CSS-masked `<span>` rather than an image, so the name is always the accessible thing.
+   *   - nothing on this page is a photograph or a raster illustration — still no `<img>` at all.
+   *   - the one drawing is decorative, so a screen reader is not read a picture whose every
+   *     claim is already made in words beside it.
+   *   - the `KH` initials stand-in is gone rather than sitting next to its replacement.
+   *
+   * The constraint that made the illustration abstract is enforced by the numerals test below,
+   * not here: an SVG `<text>` node would count toward it, which is why the drawing carries no
+   * labels and no figures.
    */
-  it("shows the supplied brand mark, decoratively, and still names the product as type", () => {
+  it("draws the hero as decorative vector art, with no raster image, and names the product as type", () => {
     const { container } = render(<LandingPage />);
 
-    const images = container.querySelectorAll("img");
-    expect(images).toHaveLength(1);
+    // No photography and no raster illustration — the design system forbids both.
+    expect(container.querySelector("img")).toBeNull();
 
-    // Decorative: the wordmark beside it already says "Kayla Health", and a screen reader
-    // announcing the mark as well would say the name twice.
-    const mark = images[0] as HTMLImageElement;
-    expect(mark.getAttribute("alt")).toBe("");
-    expect(mark.getAttribute("aria-hidden")).toBe("true");
-    expect(mark.getAttribute("src")).toContain("kayla-mark");
+    // Exactly one drawing, and it is decoration rather than content.
+    const svgs = container.querySelectorAll("svg");
+    expect(svgs).toHaveLength(1);
+    const illustration = svgs[0] as SVGElement;
+    expect(illustration.getAttribute("aria-hidden")).toBe("true");
+    expect(illustration.getAttribute("role")).toBe("presentation");
 
-    // No illustration has been invented to accompany it.
-    expect(container.querySelector("svg")).toBeNull();
-
-    // The brand is still type: the mark is a shape, not a name.
+    // The brand is still type: the mark is a shape, the name is the accessible thing.
     expect(screen.getAllByText("Kayla Health").length).toBeGreaterThan(0);
 
     // And the initials stand-in the mark replaced is gone, rather than sitting beside it.

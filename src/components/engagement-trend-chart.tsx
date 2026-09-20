@@ -45,6 +45,22 @@
  * label rule applies here exactly as it does on every other suppressible field on this dashboard),
  * and the comparison column when one applies. The chart is a visual reinforcement of that table,
  * not a second source of truth.
+ *
+ * --------------------------------------------------------------------------------------------
+ * Size, and why the plot is capped rather than fluid
+ * --------------------------------------------------------------------------------------------
+ * The `<svg>` used to be `w-full` and nothing else. An SVG with a viewBox and no height keeps its
+ * aspect ratio, so across a full-width dashboard it grew to roughly six hundred units tall — a
+ * four-point line occupying a whole screen, with the table carrying the actual numbers pushed
+ * below the fold. A trend with four points does not need that much room; it needs to be read at a
+ * glance next to its figures.
+ *
+ * So the plot is capped in height, and from `xl` the table sits beside it rather than under it.
+ * Four milestones and their percentages now land in one view, which is the only arrangement in
+ * which the two are actually compared.
+ *
+ * `preserveAspectRatio` keeps its default (`xMidYMid meet`), so the drawing scales down into the
+ * capped box and stays centred instead of stretching and distorting its stroke weights.
  */
 
 import type { components } from "@/api/generated";
@@ -68,12 +84,33 @@ export interface EngagementTrendChartProps {
   readonly comparisonLabel: string;
 }
 
-const WIDTH = 600;
+/**
+ * The drawing's own coordinate space. Four-to-one, not the near-three-to-one it used to be.
+ *
+ * The viewBox aspect decides how much of its box the chart actually fills: `preserveAspectRatio`
+ * scales the drawing to fit and centres what is left over, so a plot that is squarer than the
+ * space it is given letterboxes, leaving a gutter on each side of a chart that is supposed to
+ * span a dashboard. Four-to-one is close to the ratio the capped box actually has on a wide
+ * screen, so the line now runs the width of its card instead of stopping short of it.
+ *
+ * Nothing here is a pixel measurement — these are user units, and every length below is derived
+ * from them, so widening the box re-lays the whole chart out on its own.
+ */
+const WIDTH = 880;
 const HEIGHT = 220;
 const PAD = { top: 16, right: 16, bottom: 32, left: 36 };
 const PLOT_W = WIDTH - PAD.left - PAD.right;
 const PLOT_H = HEIGHT - PAD.top - PAD.bottom;
-const GRID_LINES = [0, 50, 100] as const;
+/**
+ * Quartiles rather than just the two ends and the middle.
+ *
+ * Three lines told you whether a point was above or below half. Five let you read roughly *where*
+ * a milestone sits without going to the table beside it — which is the whole job of the chart,
+ * since the table is the place the exact figure lives. The labels stay on the axis and never on
+ * the points: a percentage drawn next to a dot would be the same number the table already
+ * carries, and this dashboard states a figure once.
+ */
+const GRID_LINES = [0, 25, 50, 75, 100] as const;
 
 function xFor(index: number, count: number): number {
   return count <= 1 ? PAD.left : PAD.left + (index * PLOT_W) / (count - 1);
@@ -119,106 +156,120 @@ export function EngagementTrendChart({
   const illustrative = comparisonMode === "illustrative_previous_cohort";
 
   return (
-    <div className="flex flex-col gap-16">
-      <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} aria-hidden="true" className="w-full">
-        {GRID_LINES.map((value) => (
-          <g key={value} className="text-hairline-cool">
-            <line
-              x1={PAD.left}
-              x2={WIDTH - PAD.right}
-              y1={yFor(value)}
-              y2={yFor(value)}
-              stroke="currentColor"
-              strokeWidth={1}
-            />
-            <text
-              x={PAD.left - 8}
-              y={yFor(value)}
-              textAnchor="end"
-              dominantBaseline="middle"
-              className="fill-text-tertiary text-micro"
-            >
-              {`${value}%`}
-            </text>
-          </g>
-        ))}
+    <div className="flex flex-col gap-24 xl:flex-row xl:items-start">
+      <div className="flex min-w-[0] flex-1 flex-col gap-16">
+        {/*
+          The plot's height cap, stepped: 176 below `xl`, 240 at `xl`, 320 at `2xl`.
 
-        {showComparison ? (
-          <g className={illustrative ? "text-text-tertiary" : "text-action-secondary"}>
-            <path
-              d={buildPath(comparisonValues)}
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={2}
-              strokeDasharray={illustrative ? "6 5" : undefined}
-              strokeLinecap="round"
-            />
-          </g>
-        ) : null}
+          There is no height token, so each is composed from ones that exist, the way the rail's
+          own width is. The steps break at `xl` because that is where the table's position
+          changes: below it the table sits *under* the chart rather than beside it, so the card is
+          that much taller and a short viewport starts to scroll. 1024x768 — an iPad in landscape
+          — is the case that actually failed, and it takes the base cap, so there is deliberately
+          no `lg` step between them to override it.
+        */}
+        <div className="h-[calc(var(--spacing-80)*2+var(--spacing-16))] w-full xl:h-[calc(var(--spacing-80)*3)] 2xl:h-[calc(var(--spacing-80)*4)]">
+          <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} aria-hidden="true" className="h-full w-full">
+            {GRID_LINES.map((value) => (
+              <g key={value} className="text-hairline-cool">
+                <line
+                  x1={PAD.left}
+                  x2={WIDTH - PAD.right}
+                  y1={yFor(value)}
+                  y2={yFor(value)}
+                  stroke="currentColor"
+                  strokeWidth={1}
+                />
+                <text
+                  x={PAD.left - 8}
+                  y={yFor(value)}
+                  textAnchor="end"
+                  dominantBaseline="middle"
+                  className="fill-text-tertiary text-micro"
+                >
+                  {`${value}%`}
+                </text>
+              </g>
+            ))}
 
-        <g className="text-action-primary">
-          <path
-            d={buildPath(currentValues)}
-            fill="none"
-            stroke="currentColor"
-            strokeWidth={2.5}
-            strokeLinecap="round"
-          />
-          {currentTrend.map((point, index) =>
-            point.suppressed || point.completion_pct === null ? null : (
-              <circle
-                key={point.milestone_day}
-                cx={xFor(index, currentTrend.length)}
-                cy={yFor(point.completion_pct * 100)}
-                r={4}
-                fill="currentColor"
-              />
-            ),
-          )}
-        </g>
+            {showComparison ? (
+              <g className={illustrative ? "text-text-tertiary" : "text-action-secondary"}>
+                <path
+                  d={buildPath(comparisonValues)}
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                  strokeDasharray={illustrative ? "6 5" : undefined}
+                  strokeLinecap="round"
+                />
+              </g>
+            ) : null}
 
-        {currentTrend.map((point, index) => (
-          <text
-            key={point.milestone_day}
-            x={xFor(index, currentTrend.length)}
-            y={HEIGHT - 10}
-            textAnchor="middle"
-            className="fill-text-tertiary text-micro"
-          >
-            {`Day ${point.milestone_day}`}
-          </text>
-        ))}
-      </svg>
-
-      <div className="flex flex-wrap items-center gap-16 text-meta text-text-secondary">
-        <span className="inline-flex items-center gap-8">
-          <span aria-hidden="true" className="h-2 w-16 rounded-full bg-action-primary" />
-          {currentLabel}
-        </span>
-        {showComparison ? (
-          <span className="inline-flex items-center gap-8">
-            <svg
-              width={16}
-              height={4}
-              aria-hidden="true"
-              className={illustrative ? "text-text-tertiary" : "text-action-secondary"}
-            >
-              <line
-                x1={0}
-                y1={2}
-                x2={16}
-                y2={2}
+            <g className="text-action-primary">
+              <path
+                d={buildPath(currentValues)}
+                fill="none"
                 stroke="currentColor"
-                strokeWidth={2}
-                strokeDasharray={illustrative ? "4 3" : undefined}
+                strokeWidth={2.5}
+                strokeLinecap="round"
               />
-            </svg>
-            {comparisonLabel}
+              {currentTrend.map((point, index) =>
+                point.suppressed || point.completion_pct === null ? null : (
+                  <circle
+                    key={point.milestone_day}
+                    cx={xFor(index, currentTrend.length)}
+                    cy={yFor(point.completion_pct * 100)}
+                    r={4}
+                    fill="currentColor"
+                  />
+                ),
+              )}
+            </g>
+
+            {currentTrend.map((point, index) => (
+              <text
+                key={point.milestone_day}
+                x={xFor(index, currentTrend.length)}
+                y={HEIGHT - 10}
+                textAnchor="middle"
+                className="fill-text-tertiary text-micro"
+              >
+                {`Day ${point.milestone_day}`}
+              </text>
+            ))}
+          </svg>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-16 text-meta text-text-secondary">
+          <span className="inline-flex items-center gap-8">
+            <span aria-hidden="true" className="h-2 w-16 rounded-full bg-action-primary" />
+            {currentLabel}
           </span>
-        ) : null}
+          {showComparison ? (
+            <span className="inline-flex items-center gap-8">
+              <svg
+                width={16}
+                height={4}
+                aria-hidden="true"
+                className={illustrative ? "text-text-tertiary" : "text-action-secondary"}
+              >
+                <line
+                  x1={0}
+                  y1={2}
+                  x2={16}
+                  y2={2}
+                  stroke="currentColor"
+                  strokeWidth={2}
+                  strokeDasharray={illustrative ? "4 3" : undefined}
+                />
+              </svg>
+              {comparisonLabel}
+            </span>
+          ) : null}
+        </div>
       </div>
 
-      <table className="w-full border-collapse text-left text-copy">
+      <table className="w-full border-collapse text-left text-copy xl:w-[calc(var(--spacing-80)*5)] xl:shrink-0">
         <caption className="sr-only">{`${currentLabel} milestone check-in completion, by day`}</caption>
         <thead>
           <tr className="border-b border-hairline-lilac text-meta font-bold uppercase tracking-eyebrow-tight text-text-tertiary">
