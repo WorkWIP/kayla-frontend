@@ -296,6 +296,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/chat/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read my own recent Kayla conversation
+         * @description The caller's own recent chat messages, oldest first, so a client can restore the conversation instead of opening on a blank screen. Scoped to the calling worker by `user_id` as well as by tenant: a worker's chat history is never another worker's to read, inside their organisation or outside it. Message text that the retention job (`kayla.chat.jobs`) has already purged comes back as an empty string on a row that still reports when it was sent.
+         */
+        get: operations["read_chat_history_chat_history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/chat/messages": {
         parameters: {
             query?: never;
@@ -1172,6 +1192,79 @@ export interface components {
             file: string;
         };
         /**
+         * ChatCitation
+         * @description One citation chip, read directly off a chunk actually used for generation — mirrors
+         *     `kayla.rag.pipeline.Citation` exactly. See the module docstring.
+         */
+        ChatCitation: {
+            /**
+             * Doc Id
+             * @description The kb_documents row this citation resolves to.
+             */
+            doc_id: string;
+            /**
+             * Doc Title
+             * @description The document's own title, denormalised for a chip's own label.
+             */
+            doc_title?: string | null;
+            /**
+             * Section Path
+             * @description The heading path within that document, e.g. ['4. Time Off', '4.2 PTO'].
+             */
+            section_path: string[];
+        };
+        /**
+         * ChatHistoryEntry
+         * @description One persisted message — worker's or Kayla's — as `GET /chat/history` returns it.
+         *
+         *     Deliberately flat, one row per message rather than per exchange: `chat_messages` stores the two
+         *     halves of a turn as two rows (`kayla.chat.models.ChatMessageRole`), and collapsing them here
+         *     would mean inventing a pairing the table does not itself guarantee.
+         */
+        ChatHistoryEntry: {
+            /**
+             * Citations
+             * @description The citations this answer carried, if any — empty for everything else.
+             */
+            citations?: components["schemas"]["ChatCitation"][];
+            /**
+             * Content
+             * @description The message text.
+             */
+            content: string;
+            /**
+             * Created At
+             * Format: date-time
+             * @description When the message was persisted, UTC.
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             * @description The chat_messages row id.
+             */
+            id: string;
+            /** @description Who sent it — 'user' or 'assistant'. */
+            role: components["schemas"]["ChatMessageRole"];
+            /** @description What happened to this turn, for an assistant message — the same vocabulary `ChatTurnResult.status` carries, so a restored message renders identically to the one the client originally streamed. Always null for a worker's own message. */
+            status?: components["schemas"]["ChatMessageStatus"] | null;
+        };
+        /**
+         * ChatHistoryResponse
+         * @description `GET /chat/history` — the caller's own recent conversation, oldest first.
+         *
+         *     Oldest-first because that is render order: a client appends these straight into the same list
+         *     live turns land in, and reversing a list on arrival is a step a client should not have to
+         *     remember to take.
+         */
+        ChatHistoryResponse: {
+            /**
+             * Messages
+             * @description Up to `limit` most-recent messages, returned oldest first.
+             */
+            messages?: components["schemas"]["ChatHistoryEntry"][];
+        };
+        /**
          * ChatMessageRequest
          * @description `POST /chat/messages`'s request body: one message, one declared locale.
          */
@@ -1191,6 +1284,23 @@ export interface components {
              */
             locale: string;
         };
+        /**
+         * ChatMessageRole
+         * @description Who authored this turn. Exactly two values — Kayla chat has no system/tool-role rows
+         *     visible at this layer; anything the orchestrator does internally to produce an assistant turn
+         *     is not itself a persisted message.
+         * @enum {string}
+         */
+        ChatMessageRole: "user" | "assistant";
+        /**
+         * ChatMessageStatus
+         * @description What happened to an assistant turn — retrieval outcomes plus this phase's three escalation
+         *     paths (agents.md §10.8 task 3), in one closed vocabulary. See the module docstring for why this
+         *     is nullable and only meaningful on `role=ASSISTANT` rows, and why a `role=USER` row's status is
+         *     always `NULL`.
+         * @enum {string}
+         */
+        ChatMessageStatus: "answered" | "abstained" | "out_of_scope" | "crisis" | "escalated_hr" | "escalated_human_coach";
         /**
          * CheckinCompletionTile
          * @description Overview's "check-in completion" tile — `overview_org_summary()`'s own
@@ -3864,6 +3974,37 @@ export interface operations {
             };
             /** @description A dependency the request needed did not answer. Requests are refused rather than admitted unenforced. */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    read_chat_history_chat_history_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatHistoryResponse"];
+                };
+            };
+            /** @description `limit` is outside 1..100. */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
