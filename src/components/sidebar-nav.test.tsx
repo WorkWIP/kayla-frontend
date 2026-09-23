@@ -248,6 +248,31 @@ describe("SidebarNav — the brand block shows the customer, not the product", (
   });
 });
 
+describe("SidebarNav — the org's own logo mark, and recovering from a failed load", () => {
+  it("recovers when a fresh logo URL replaces one that failed to load (code-review gate B3)", () => {
+    const { container, rerender } = render(
+      <SidebarNav user={{ ...USER, org_logo_url: "https://cdn.example/broken.png" }} />,
+    );
+
+    const brokenImg = container.querySelector("img[src='https://cdn.example/broken.png']");
+    expect(brokenImg).not.toBeNull();
+    fireEvent.error(brokenImg as HTMLImageElement);
+
+    // The failure falls back to the default Kayla mark — no <img> left in the rail at all, never
+    // a broken-image icon.
+    expect(container.querySelector("img")).toBeNull();
+    expect(screen.getByRole("button", { name: "Collapse navigation" })).toBeDefined();
+
+    // The org owner uploads a new, working logo under the same session — a fresh URL.
+    rerender(<SidebarNav user={{ ...USER, org_logo_url: "https://cdn.example/working.png" }} />);
+
+    // Without the B3 fix, `OrgMark`'s own `failed` state would outlive the prop change and this
+    // would still render the default mark forever, even though the new URL was never given a
+    // chance to load.
+    expect(container.querySelector("img[src='https://cdn.example/working.png']")).not.toBeNull();
+  });
+});
+
 describe("SidebarNav — footer and the mobile drawer", () => {
   it("keeps Settings and Sign out together, after every other destination", () => {
     render(<SidebarNav user={USER} />);

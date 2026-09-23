@@ -60,10 +60,17 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 
-import { ApiError, CLIENT_ERROR_CODES, apiRequest, getSession, updateSessionUser } from "@/api/client";
+import { ApiError, CLIENT_ERROR_CODES, apiRequest, getSession } from "@/api/client";
 import type { components } from "@/api/generated";
 import type { LogoUploadHandle } from "@/components/logo-upload-field";
 import { LogoUploadField } from "@/components/logo-upload-field";
+import {
+  DISPLAY_NAME_MAX_LENGTH,
+  LogoSubmitError,
+  applyBrandingUpdate,
+  brandingErrorMessage,
+  saveBranding,
+} from "@/lib/branding";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -367,29 +374,13 @@ function ThresholdsSection({
  * 1a. Branding (whitelabel PRD Phase 2) — display name + logo, editable after onboarding
  * ---------------------------------------------------------------------------------------- */
 
-const DISPLAY_NAME_MAX_LENGTH = 200;
+const GENERIC_BRANDING_FAILURE = "Could not save branding. Try again in a moment.";
 
 type BrandingSaveState =
   | { readonly status: "idle" }
   | { readonly status: "saving" }
   | { readonly status: "saved" }
   | { readonly status: "error"; readonly message: string };
-
-/**
- * Every write here (name edit, name reset, logo replace, logo remove) shares one shape: call one
- * or two of `PATCH /dashboard/settings/branding` / the logo upload flow, feed the resulting
- * `BrandingResponse` back into `onSaved` (so the section's own draft resyncs) and into
- * `updateSessionUser` (so the sidebar/tab-title reflect it immediately — see that function's own
- * docstring and `org-branding-step.tsx`'s, which states the same "no re-login required"
- * acceptance criterion this section has to meet for a *post*-onboarding edit too).
- */
-function applyBranding(
-  latest: BrandingResponse,
-  onSaved: (next: BrandingResponse) => void,
-): void {
-  onSaved(latest);
-  updateSessionUser({ org_name: latest.display_name, org_logo_url: latest.logo_url ?? null });
-}
 
 function BrandingSection({
   branding,
@@ -403,11 +394,22 @@ function BrandingSection({
   const [saveState, setSaveState] = useState<BrandingSaveState>({ status: "idle" });
   const logoRef = useRef<LogoUploadHandle>(null);
 
+  /**
+   * Whether `displayName` holds an edit the person has typed but not yet saved (code-review gate
+   * B5). Set on every keystroke, cleared once a save actually commits a name change. Read below to
+   * skip the prop resync while it's true — otherwise an unrelated success on this same form (e.g.
+   * "Remove logo", "Reset to default") would silently overwrite an in-progress, unsaved name edit
+   * the moment its own `branding` prop update lands, with no warning to the person who typed it.
+   */
+  const [hasUnsavedNameEdit, setHasUnsavedNameEdit] = useState(false);
+
   // Same "adjusting state when a prop changes" pattern as `ThresholdsSection` above: a fresh
   // `branding` object (this section's own save round-tripping, or a save made elsewhere) resets
-  // the draft rather than showing a value the server has already superseded.
+  // the draft rather than showing a value the server has already superseded — but only when there
+  // is no unsaved edit sitting in the field (B5): a save triggered by a *different* control on
+  // this form (logo remove/reset) must not discard text the person is still typing.
   const [syncedBranding, setSyncedBranding] = useState(branding);
-  if (branding !== syncedBranding) {
+  if (branding !== syncedBranding && !hasUnsavedNameEdit) {
     setSyncedBranding(branding);
     setDisplayName(branding.display_name);
   }
@@ -419,6 +421,7 @@ function BrandingSection({
 
   function handleNameChange(value: string) {
     setDisplayName(value);
+    setHasUnsavedNameEdit(true);
     if (saveState.status !== "idle") setSaveState({ status: "idle" });
   }
 
@@ -428,22 +431,25 @@ function BrandingSection({
 
     setSaveState({ status: "saving" });
     try {
-      // The logo first, matching `org-branding-step.tsx`'s own ordering rationale: the slower,
-      // more failure-prone request goes first, and a failure here stops the name PATCH from firing
-      // on top of it rather than silently dropping one half of a two-field save.
-      const uploaded = await logoRef.current?.submit();
-      let latest = uploaded ?? null;
-
-      if (nameChanged) {
-        latest = await apiRequest("patch", "/dashboard/settings/branding", {
-          body: { display_name: trimmedName },
-        });
-      }
-
-      if (latest !== null) applyBranding(latest, onSaved);
+      // `saveBranding` (`src/lib/branding.ts`) is the one save sequence this section shares with
+      // `org-branding-step.tsx`: logo first, applied to the session the instant it lands, then the
+      // name — so a logo that uploaded fine is never lost from the UI if the name PATCH that
+      // follows it then fails (code-review gate B1).
+      await saveBranding({
+        logo: logoRef.current,
+        displayNameToSave: nameChanged ? trimmedName : null,
+        onSaved,
+      });
+      if (nameChanged) setHasUnsavedNameEdit(false);
       setSaveState({ status: "saved" });
     } catch (error) {
-      setSaveState({ status: "error", message: messageFor(error) });
+      if (error instanceof LogoSubmitError) {
+        // `LogoUploadField` already rendered its own inline alert for this exact failure — a
+        // second one here would announce it twice to a screen reader (code-review gate B7).
+        setSaveState({ status: "idle" });
+        return;
+      }
+      setSaveState({ status: "error", message: brandingErrorMessage(error, GENERIC_BRANDING_FAILURE) });
     }
   }
 
@@ -454,10 +460,10 @@ function BrandingSection({
       const latest = await apiRequest("patch", "/dashboard/settings/branding", {
         body: { reset_display_name: true },
       });
-      applyBranding(latest, onSaved);
+      applyBrandingUpdate(latest, onSaved);
       setSaveState({ status: "saved" });
     } catch (error) {
-      setSaveState({ status: "error", message: messageFor(error) });
+      setSaveState({ status: "error", message: brandingErrorMessage(error, GENERIC_BRANDING_FAILURE) });
     }
   }
 
@@ -468,11 +474,14 @@ function BrandingSection({
       const latest = await apiRequest("patch", "/dashboard/settings/branding", {
         body: { remove_logo: true },
       });
-      logoRef.current?.reset();
-      applyBranding(latest, onSaved);
+      // Only clear the field when it has nothing pending — a logo the person picked but has not
+      // yet saved in this same form must not be silently discarded by an unrelated "Remove logo"
+      // success (code-review gate B6).
+      if (!logoRef.current?.hasSelection) logoRef.current?.reset();
+      applyBrandingUpdate(latest, onSaved);
       setSaveState({ status: "saved" });
     } catch (error) {
-      setSaveState({ status: "error", message: messageFor(error) });
+      setSaveState({ status: "error", message: brandingErrorMessage(error, GENERIC_BRANDING_FAILURE) });
     }
   }
 

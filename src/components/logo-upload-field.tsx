@@ -127,6 +127,28 @@ function putFileWithProgress(
   });
 }
 
+/**
+ * The preview box's contents: the image at `src`, or "No logo" once it fails to load. Its own
+ * `failed` state is deliberately local to this component (not lifted into `LogoUploadField`) so
+ * that keying it by `src` — as `LogoUploadField` does below — remounts the failure state along
+ * with everything else whenever `src` changes, for either reason that can happen: a new file
+ * picked, or `currentLogoUrl` itself changing under an unchanged selection (code-review gate B4).
+ */
+function LogoPreview({ src }: { readonly src: string | null }) {
+  const [failed, setFailed] = useState(false);
+
+  if (src === null || failed) {
+    return <span className="px-4 text-center text-meta text-text-tertiary">No logo</span>;
+  }
+
+  return (
+    // A remote, per-org URL with no fixed hostname to allowlist — see the module docstring for
+    // why this is a plain <img> rather than next/image.
+    // eslint-disable-next-line @next/next/no-img-element -- remote per-org logo, no static domain to allowlist
+    <img src={src} alt="" onError={() => setFailed(true)} className="size-full object-contain" />
+  );
+}
+
 export interface LogoUploadHandle {
   /** Whether a new file is picked and waiting to be uploaded. */
   readonly hasSelection: boolean;
@@ -175,7 +197,6 @@ export function LogoUploadField({
   const [validationError, setValidationError] = useState<string | null>(null);
   const [phase, setPhase] = useState<UploadPhase>({ kind: "idle" });
   const [dragActive, setDragActive] = useState(false);
-  const [imageFailed, setImageFailed] = useState(false);
 
   useEffect(() => {
     onSelectionChange?.(selection !== null);
@@ -203,7 +224,6 @@ export function LogoUploadField({
       return;
     }
     setValidationError(null);
-    setImageFailed(false);
     if (phase.kind === "error") setPhase({ kind: "idle" });
     // The effect above revokes whichever URL this replaces — see its own comment for why
     // revocation lives there and not here.
@@ -230,7 +250,6 @@ export function LogoUploadField({
       reset() {
         setSelection(null);
         setValidationError(null);
-        setImageFailed(false);
         setPhase({ kind: "idle" });
       },
       async submit() {
@@ -290,19 +309,13 @@ export function LogoUploadField({
         ].join(" ")}
       >
         <div className="flex size-80 shrink-0 items-center justify-center overflow-hidden rounded-control border border-hairline-lilac bg-surface-card">
-          {previewSrc !== null && !imageFailed ? (
-            // A remote, per-org URL with no fixed hostname to allowlist — see the module
-            // docstring for why this is a plain <img> rather than next/image.
-            // eslint-disable-next-line @next/next/no-img-element -- remote per-org logo, no static domain to allowlist
-            <img
-              src={previewSrc}
-              alt=""
-              onError={() => setImageFailed(true)}
-              className="size-full object-contain"
-            />
-          ) : (
-            <span className="px-4 text-center text-meta text-text-tertiary">No logo</span>
-          )}
+          {/* Keyed by the URL itself (code-review gate B4): `LogoPreview` tracks its own
+              load-failure state internally, and a `key` change remounts the whole component —
+              hooks included — so a transient failure loading the org's *existing* saved logo does
+              not permanently show "No logo" once `currentLogoUrl` changes to something new and
+              working (e.g. a different logo saved elsewhere in the same session), and a freshly
+              picked file always gets a clean chance to load too. */}
+          <LogoPreview key={previewSrc} src={previewSrc} />
         </div>
 
         <div className="flex flex-1 flex-col items-start gap-8">

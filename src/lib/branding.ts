@@ -8,11 +8,18 @@
  * avoid, just for a second upload flow.
  */
 
-import { ApiError, CLIENT_ERROR_CODES } from "@/api/client";
+import { ApiError, CLIENT_ERROR_CODES, apiRequest, updateSessionUser } from "@/api/client";
 import type { components } from "@/api/generated";
 
 export type BrandingResponse = components["schemas"]["BrandingResponse"];
 export type BrandingUpdateRequest = components["schemas"]["BrandingUpdateRequest"];
+
+/**
+ * `kayla.branding.models`/`OrgBranding.display_name` — mirrors the column's own `varchar(200)`.
+ * Lived as a raw `200` literal duplicated in both `org-branding-step.tsx` and `settings/page.tsx`
+ * until a code-review gate flagged the drift risk; both now import this instead.
+ */
+export const DISPLAY_NAME_MAX_LENGTH = 200;
 
 /**
  * `kayla.branding.storage.ALLOWED_CONTENT_TYPES` — png/jpeg/webp only (no SVG: an uploaded SVG can
@@ -58,4 +65,107 @@ export function brandingErrorMessage(error: unknown, fallback: string): string {
     return error.message || fallback;
   }
   return fallback;
+}
+
+/* -------------------------------------------------------------------------------------------
+ * The shared save sequence (code-review gate B1/B2/B10)
+ * --------------------------------------------------------------------------------------------
+ * `BrandingSection` (`settings/page.tsx`) and `OrgBrandingStep` (`org-branding-step.tsx`) each used
+ * to hand-roll the identical "upload the logo, then PATCH the name, then apply whichever changed"
+ * sequence. Two problems came from that duplication rather than from either copy individually:
+ *
+ * 1. Both copies applied the result to the session/UI only *after* every step had succeeded — so a
+ *    logo that uploaded fine, followed by a name PATCH that then threw, left the new logo sitting
+ *    on the server with nothing in the session, sidebar or tab title reflecting it until a full
+ *    page reload. `saveBranding` below applies each step's result the moment that step succeeds,
+ *    before attempting the next one, so a later failure never discards earlier, already-durable
+ *    progress.
+ * 2. Fixing the above in one file and not the other would leave the bug half-fixed. One function,
+ *    two call sites.
+ * ---------------------------------------------------------------------------------------- */
+
+/**
+ * The minimal shape `saveBranding` needs from `LogoUploadField`'s own `LogoUploadHandle`
+ * (`logo-upload-field.tsx`) — structural, not imported, so this module does not have to import
+ * from a component file it is itself imported by.
+ */
+export interface LogoSubmitter {
+  submit(): Promise<BrandingResponse | null>;
+}
+
+/**
+ * Marks a `saveBranding` rejection as having come from the logo `submit()` step specifically, so a
+ * caller can tell it apart from a name-PATCH failure (code-review gate B7).
+ *
+ * `LogoUploadField.submit()` already renders its own inline `role="alert"` for exactly this
+ * failure (see that component's `phase.kind === "error"` branch) before rejecting — a caller that
+ * *also* renders a second alert for the same rejection makes a screen reader announce one failure
+ * twice. Catching this type is how a caller recognises "already shown, say nothing more" without
+ * either module having to import the other's error-rendering internals.
+ */
+export class LogoSubmitError extends Error {
+  constructor(readonly cause: unknown) {
+    super("Logo upload failed — see the field's own inline error.");
+    this.name = "LogoSubmitError";
+  }
+}
+
+export interface SaveBrandingInput {
+  /** The logo field's imperative handle, or `null`/omitted when this screen has none (there is
+   * always one today, but this keeps the function honest about what it actually needs). `submit()`
+   * is already a no-op returning `null` when nothing new was picked. */
+  readonly logo?: LogoSubmitter | null;
+  /** The trimmed display name to PATCH, or `null` to skip the name write entirely — the caller has
+   * already decided whether the name actually changed. */
+  readonly displayNameToSave: string | null;
+  /**
+   * Called the instant EITHER step's response lands — once for the logo (if one was uploaded),
+   * again for the name (if one was sent) — so each success is durably reflected in the caller's
+   * own state and the session (`updateSessionUser`) before the next step is even attempted. See
+   * this section's own docstring for why "apply once, at the very end" was the bug.
+   */
+  readonly onSaved: (next: BrandingResponse) => void;
+}
+
+/**
+ * Apply one `BrandingResponse` to both the caller's own draft state and the in-memory session, so
+ * the sidebar/tab-title reflect it immediately — the "no re-login required" acceptance criterion
+ * both `org-branding-step.tsx` and `settings/page.tsx`'s Branding section have to meet.
+ *
+ * Exported (not just used internally by `saveBranding`) for `settings/page.tsx`'s "Reset to
+ * default" and "Remove logo" actions — each is a single `PATCH`, not the upload-then-name
+ * sequence `saveBranding` coordinates, but still needs the identical apply-to-session step.
+ */
+export function applyBrandingUpdate(latest: BrandingResponse, onSaved: (next: BrandingResponse) => void): void {
+  onSaved(latest);
+  updateSessionUser({ org_name: latest.display_name, org_logo_url: latest.logo_url ?? null });
+}
+
+/**
+ * The one save sequence both call sites use: upload the logo first (the slower, more
+ * failure-prone of the two), applying its result the moment it lands, then PATCH the display name
+ * if one was asked for, applying that too. If the logo step throws, the name step is never
+ * attempted (matching both callers' original ordering rationale — do not PATCH a name on top of a
+ * failed logo save without the person knowing the logo part didn't happen), and the rejection is
+ * wrapped in `LogoSubmitError` so the caller can skip its own duplicate error alert (B7). If the
+ * name step throws, the logo's own already-applied update is unaffected — the caller's catch only
+ * has the name failure left to report.
+ */
+export async function saveBranding(input: SaveBrandingInput): Promise<void> {
+  let uploaded: BrandingResponse | null;
+  try {
+    uploaded = (await input.logo?.submit()) ?? null;
+  } catch (cause) {
+    throw new LogoSubmitError(cause);
+  }
+  if (uploaded !== null) {
+    applyBrandingUpdate(uploaded, input.onSaved);
+  }
+
+  if (input.displayNameToSave !== null) {
+    const latest = await apiRequest("patch", "/dashboard/settings/branding", {
+      body: { display_name: input.displayNameToSave },
+    });
+    applyBrandingUpdate(latest, input.onSaved);
+  }
 }

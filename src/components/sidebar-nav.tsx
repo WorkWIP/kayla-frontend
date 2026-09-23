@@ -404,8 +404,18 @@ function CloseGlyph() {
  *
  * `onError` — not a `try`/`catch`, since a broken image URL is a load failure the browser reports
  * asynchronously — falls back to `BrandMark` rather than leaving the classic broken-image icon in
- * the rail. `key={logoUrl}` forces a fresh `<img>` (and a fresh chance to load) if the org's logo
- * URL itself changes under this component, e.g. right after a Settings-page replace.
+ * the rail.
+ *
+ * `failed` is `OrgMark`'s own component state, so a `key` on the `<img>` alone (a version this
+ * once shipped with) does nothing for it: remounting the *host element* does not reset a hook
+ * belonging to its *parent* function component, and the `logoUrl === null || failed` check above
+ * that `<img>` still short-circuits to `BrandMark` forever after the first failure, before a fresh
+ * `<img>` ever gets a chance to load the org's new URL (code-review gate B3 — a failed logo load
+ * would otherwise permanently fall back to the default mark for the rest of the mount, even after
+ * the org owner uploads a working replacement). The caller below keys the whole `OrgMark`
+ * component by `logoUrl` instead, which remounts `OrgMark` itself — and every hook in it,
+ * `failed` included — back to its initial state whenever the URL actually changes. See
+ * `kayla-mobile`'s `src/app/index.tsx` for the same fix applied to its own org-logo `<Image>`.
  */
 function OrgMark({ logoUrl }: { readonly logoUrl: string | null }) {
   const [failed, setFailed] = useState(false);
@@ -417,7 +427,6 @@ function OrgMark({ logoUrl }: { readonly logoUrl: string | null }) {
   return (
     // eslint-disable-next-line @next/next/no-img-element -- remote per-org logo, no static domain to allowlist
     <img
-      key={logoUrl}
       src={logoUrl}
       alt=""
       aria-hidden="true"
@@ -614,7 +623,10 @@ export function SidebarNav({ user, mobileOpen = false, onMobileClose }: SidebarN
               aria-label={collapsed ? "Expand navigation" : "Collapse navigation"}
               className="flex size-48 shrink-0 items-center justify-center rounded-control transition-colors duration-[var(--duration-fast)] ease-standard hover:bg-surface-warm-gray focus-visible:outline-hidden focus-visible:inset-shadow-focus-plum"
             >
-              <OrgMark logoUrl={orgLogoUrl} />
+              {/* Keyed by the URL itself, not just passed as a prop — see `OrgMark`'s own
+                  docstring for why the component has to remount, not merely re-render, for a
+                  fresh logo URL to get a fresh chance to load after an earlier one failed. */}
+              <OrgMark key={orgLogoUrl ?? "default"} logoUrl={orgLogoUrl} />
             </button>
             <div
               className={[

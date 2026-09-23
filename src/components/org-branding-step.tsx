@@ -32,32 +32,32 @@
  * A display-name change goes through `PATCH /dashboard/settings/branding`; a logo goes through
  * `LogoUploadField`'s own presign -> PUT -> confirm, exposed via `useImperativeHandle` (see that
  * file's docstring for why). This screen offers both in one field each, so "Save & finish" drives
- * both from a single submit handler rather than asking for two separate saves — the logo first
- * (the slower, more failure-prone of the two), then the name, updating the in-memory session with
- * whichever response actually changed. If either request fails, the other is not attempted and
- * the person sees one error with the chance to fix it and try again, or give up and skip.
+ * both from a single submit handler — `saveBranding` (`src/lib/branding.ts`), the one save
+ * sequence this component shares with `settings/page.tsx`'s Branding section rather than
+ * reimplementing (a code-review gate found the two copies had drifted: applying the logo's result
+ * only after the name PATCH also succeeded meant a successfully-uploaded logo could vanish from
+ * the UI until a reload if the name PATCH then failed). See that function's own docstring for the
+ * exact ordering and incremental-apply guarantee.
  *
  * --------------------------------------------------------------------------------------------
  * Updating the session in place
  * --------------------------------------------------------------------------------------------
- * `updateSessionUser` (`src/api/client.ts`) patches `org_name`/`org_logo_url` on the session
- * already held in memory from `setSession` (called by `org-signup-verify-flow.tsx` right before
- * this step renders). Without it, the sidebar would show the *pre-branding* name/no-logo until a
- * future full session restore — the PRD's Phase 2 acceptance criterion is explicit that branding
- * set during onboarding must be visible in the sidebar "without a page reload requiring re-login".
+ * `saveBranding` calls `updateSessionUser` (`src/api/client.ts`) itself, patching
+ * `org_name`/`org_logo_url` on the session already held in memory from `setSession` (called by
+ * `org-signup-verify-flow.tsx` right before this step renders) the instant each step succeeds.
+ * Without it, the sidebar would show the *pre-branding* name/no-logo until a future full session
+ * restore — the PRD's Phase 2 acceptance criterion is explicit that branding set during onboarding
+ * must be visible in the sidebar "without a page reload requiring re-login".
  */
 
 import { useId, useRef, useState } from "react";
 import type { FormEvent } from "react";
 
-import { apiRequest, updateSessionUser } from "@/api/client";
 import { Button } from "@/components/ui/button";
 import { TextField } from "@/components/ui/field";
 import type { LogoUploadHandle } from "@/components/logo-upload-field";
 import { LogoUploadField } from "@/components/logo-upload-field";
-import { brandingErrorMessage } from "@/lib/branding";
-
-const DISPLAY_NAME_MAX_LENGTH = 200;
+import { DISPLAY_NAME_MAX_LENGTH, LogoSubmitError, brandingErrorMessage, saveBranding } from "@/lib/branding";
 
 const GENERIC_SAVE_FAILURE = "Could not save your branding. Try again, or skip for now.";
 
@@ -95,24 +95,22 @@ export function OrgBrandingStep({ organizationName, onDone }: OrgBrandingStepPro
     const nameChanged = trimmedName !== "" && trimmedName !== organizationName;
 
     try {
-      // The logo first — the slower, more failure-prone of the two requests. `submit()` is a
-      // no-op returning `null` when nothing was picked, so this is safe whether or not a file was
-      // chosen.
-      const uploaded = await logoRef.current?.submit();
-      let latest = uploaded ?? null;
-
-      if (nameChanged) {
-        latest = await apiRequest("patch", "/dashboard/settings/branding", {
-          body: { display_name: trimmedName },
-        });
-      }
-
-      if (latest !== null) {
-        updateSessionUser({ org_name: latest.display_name, org_logo_url: latest.logo_url ?? null });
-      }
-
+      await saveBranding({
+        logo: logoRef.current,
+        displayNameToSave: nameChanged ? trimmedName : null,
+        // No local draft to resync here — this step navigates away on success — so the only thing
+        // to do with each incremental result is what `saveBranding` already does on its own:
+        // update the session.
+        onSaved: () => {},
+      });
       onDone();
     } catch (caught) {
+      if (caught instanceof LogoSubmitError) {
+        // `LogoUploadField` already rendered its own inline alert for this exact failure — a
+        // second one here would make a screen reader announce it twice (code-review gate B7).
+        setSubmitting(false);
+        return;
+      }
       setError(brandingErrorMessage(caught, GENERIC_SAVE_FAILURE));
       setSubmitting(false);
     }
