@@ -170,6 +170,22 @@ let SESSION: ActiveSession | null = null;
 let inFlightRestore: Promise<ActiveSession | null> | null = null;
 
 /**
+ * Monotonically increasing token identifying whichever session currently owns `SESSION` — bumped
+ * by `setSession`, by `restoreSession`'s success path (each is a *new* signed-in identity) and by
+ * `clearSession` (a sign-out, i.e. no identity at all). `refreshSessionUserFromMe` captures this
+ * the instant it starts and only applies its result if nothing newer has started by the time it
+ * resolves.
+ *
+ * PORTED FROM `kayla-mobile`'s identical `brandingGeneration` guard (`src/api/client.ts` there),
+ * added after that codebase's own adversarial review found the race live: a slow `GET /auth/me`
+ * issued for one session can resolve *after* that session ended (a sign-out) or after a different
+ * session began (a different org signing in on the same shared browser tab) and, without this
+ * guard, would silently resurrect stale — possibly another org's — branding over whatever is
+ * current. A shared browser session has the identical risk, so this is the identical fix.
+ */
+let sessionGeneration = 0;
+
+/**
  * Who to tell when `SESSION` changes — `src/lib/session.ts`'s `useAuthenticatedSession`, and
  * nothing else today.
  *
@@ -200,6 +216,7 @@ export function subscribeToSessionChanges(listener: () => void): () => void {
  * `/orgs/signup/complete`. Memory only, and **minus the refresh token** — see `ActiveSession`.
  */
 export function setSession(session: Session): void {
+  sessionGeneration += 1;
   SESSION = {
     // Field by field rather than a spread, so that a refresh token cannot be re-admitted by a
     // future backend field this code never looked at.
@@ -248,9 +265,50 @@ export function updateSessionUser(patch: Partial<AuthenticatedUser>): void {
  * in a moment after they pressed "Sign out".
  */
 export function clearSession(): void {
+  sessionGeneration += 1;
   SESSION = null;
   inFlightRestore = null;
   notifySessionChange();
+}
+
+/**
+ * Fetch this account's real `org_name`/`org_logo_url` from `GET /auth/me` and merge them into the
+ * in-memory session — the only endpoint the backend contract promises will ever populate those two
+ * fields with real values (see `AuthenticatedUser.org_name`'s own doc comment in `generated.ts`).
+ * `POST /auth/login` and `POST /auth/session` both leave them `null` by contract, which is exactly
+ * why, absent this call, an ordinary employee logging in (unlike the org owner who just finished
+ * `POST /orgs/signup/complete`, which *does* return real values) would see default Kayla branding
+ * for the rest of their session — the scope gap this function closes.
+ *
+ * NON-BLOCKING BY CONTRACT, mirroring `kayla-mobile`'s identical `refreshBranding`
+ * (`src/api/client.ts` there): every call site fires this with `void` and moves on immediately. A
+ * caller that awaited it would delay sign-in or session-restore on a fetch whose only purpose is
+ * cosmetic branding.
+ *
+ * Guarded by `sessionGeneration` — see that variable's own docstring for why, ported from
+ * `kayla-mobile`'s own post-review fix for the identical cross-tenant race.
+ *
+ * Swallows every failure. A network error, a 401 or an unexpected response leaves whatever is
+ * already on `SESSION.user` (the `null`s from login/restore) exactly as it was — never surfaced as
+ * an error a caller has to handle, and never a reason to fail an otherwise-successful sign-in.
+ */
+export async function refreshSessionUserFromMe(): Promise<void> {
+  const generation = sessionGeneration;
+  try {
+    const me = await apiRequest("get", "/auth/me", {});
+    if (generation !== sessionGeneration) {
+      // Superseded while this fetch was in flight — a sign-out, or a different login — so applying
+      // it now would risk resurrecting stale, possibly cross-tenant, branding. Discard silently.
+      return;
+    }
+    // `||`, not `??`: an empty string is exactly as "absent" as null/undefined here — either
+    // should fall back to default Kayla branding, never render as a blank wordmark or empty
+    // sidebar name. Same fix `kayla-mobile`'s own `refreshBranding` applied for the identical
+    // reason.
+    updateSessionUser({ org_name: me.org_name || null, org_logo_url: me.org_logo_url || null });
+  } catch {
+    // Cosmetic only — see the docstring above.
+  }
 }
 
 /**
@@ -265,6 +323,10 @@ export function clearSession(): void {
  *
  * This is the only call that sends the cookie in order to *obtain* a credential, and the response
  * it adopts carries no refresh token, so nothing durable enters this bundle's memory.
+ *
+ * Also fires a non-blocking `GET /auth/me` (`refreshSessionUserFromMe`) once the restore succeeds,
+ * so a reload picks up this org's real branding the same way a fresh login does — see that
+ * function's own docstring for why `/auth/session` alone cannot carry it.
  */
 export async function restoreSession(options: RequestOptions = {}): Promise<ActiveSession | null> {
   // Deliberately not sent with the current access token even if one exists: this call is about the
@@ -275,6 +337,7 @@ export async function restoreSession(options: RequestOptions = {}): Promise<Acti
       ...options,
       sendSessionCookie: true,
     });
+    sessionGeneration += 1;
     SESSION = {
       tokens: {
         access_token: restored.access_token,
@@ -285,6 +348,11 @@ export async function restoreSession(options: RequestOptions = {}): Promise<Acti
       user: restored.user,
     };
     notifySessionChange();
+    // Fire-and-forget — see `refreshSessionUserFromMe`'s own docstring. This function's contract
+    // is "resolve with a session or null, fast"; `useAuthenticatedSession` drives the dashboard's
+    // restoring/signed-in decision off that resolution and must not also wait on a second round
+    // trip whose only purpose is cosmetic branding.
+    void refreshSessionUserFromMe();
     return SESSION;
   } catch {
     clearSession();
