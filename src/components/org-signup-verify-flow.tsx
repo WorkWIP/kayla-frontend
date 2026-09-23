@@ -46,6 +46,17 @@
  * `apiRequest`'s `SuccessStatus` already includes 201, so the generated types resolve the body
  * without any special-casing here — but it is worth knowing before wondering why a `=== 200`
  * check would be wrong.
+ *
+ * --------------------------------------------------------------------------------------------
+ * A fourth stage: the mandatory-but-skippable branding step (whitelabel PRD Phase 2)
+ * --------------------------------------------------------------------------------------------
+ * `POST /orgs/signup/complete` used to be followed directly by `router.replace("/overview")`.
+ * It is now followed by one more screen, rendered by `org-branding-step.tsx`, before that
+ * redirect ever fires — "mandatory" in that there is no code path from a freshly-created org to
+ * the dashboard that skips rendering it at least once, "skippable" in that its own "Skip for now"
+ * makes no network request at all. Account creation and email verification are unchanged and
+ * still unblocked by anything branding-related: the org already exists and the session is already
+ * set by the time this stage is reached, exactly as before.
  */
 
 import { useRouter, useSearchParams } from "next/navigation";
@@ -53,6 +64,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import type { FormEvent } from "react";
 
 import { ApiError, CLIENT_ERROR_CODES, apiRequest, setSession } from "@/api/client";
+import { OrgBrandingStep } from "@/components/org-branding-step";
 import { Button, LinkButton } from "@/components/ui/button";
 import { TextField } from "@/components/ui/field";
 import { PageSkeleton } from "@/components/ui/skeleton";
@@ -167,7 +179,8 @@ interface VerifiedSignup {
 type Stage =
   | { readonly kind: "verifying" }
   | { readonly kind: "dead"; readonly code: string }
-  | { readonly kind: "ready"; readonly signup: VerifiedSignup };
+  | { readonly kind: "ready"; readonly signup: VerifiedSignup }
+  | { readonly kind: "branding"; readonly organizationName: string };
 
 export interface OrgSignupVerifyFlowProps {
   /** The `?token=` value, or `null` when the URL carries none. */
@@ -314,7 +327,10 @@ export function OrgSignupVerifyFlow({ token }: OrgSignupVerifyFlowProps) {
         sendSessionCookie: true,
       });
       setSession(session);
-      router.replace(POST_SIGNUP_DESTINATION);
+      // Straight to the dashboard used to happen here. Now the mandatory-but-skippable branding
+      // step renders first — see the module docstring — and it is that step's own "Skip for now"
+      // or "Save & finish" that performs this exact redirect.
+      setStage({ kind: "branding", organizationName: signup.organizationName });
     } catch (error) {
       if (error instanceof ApiError && error.code === "password_too_weak") {
         // The token survives this, so the person stays exactly where they are.
@@ -362,6 +378,15 @@ export function OrgSignupVerifyFlow({ token }: OrgSignupVerifyFlowProps) {
           </LinkButton>
         </div>
       </section>
+    );
+  }
+
+  if (stage.kind === "branding") {
+    return (
+      <OrgBrandingStep
+        organizationName={stage.organizationName}
+        onDone={() => router.replace(POST_SIGNUP_DESTINATION)}
+      />
     );
   }
 

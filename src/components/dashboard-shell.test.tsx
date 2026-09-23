@@ -156,12 +156,29 @@ describe("DashboardShell", () => {
     expect(within(screen.getByRole("main")).getByText("page body")).toBeDefined();
     expect(nav.replace).not.toHaveBeenCalled();
 
-    // Exactly one request, to the one endpoint the cookie's Path admits, with the cookie attached.
-    expect(fetchMock.mock.calls).toHaveLength(1);
+    // Exactly one *session-restoring* request, to the one endpoint the cookie's Path admits, with
+    // the cookie attached — plus one background `GET /auth/me`, deliberately not awaited (see
+    // below). This is a **deliberate** change (whitelabel scope-gap fix): `restoreSession` now
+    // fires a non-blocking `refreshSessionUserFromMe()` once it adopts a restored session, because
+    // `POST /auth/session` never carries this org's real `org_name`/`org_logo_url` by contract —
+    // without it, a reload would silently drop back to default Kayla branding for the rest of the
+    // visit. The count moved from 1 to 2 for that reason, not because the one-restore-per-cookie
+    // guarantee weakened: still exactly one `POST /auth/session`, and the second call is `GET
+    // /auth/me`, which does not spend the single-use cookie at all.
+    await waitFor(() => {
+      expect(fetchMock.mock.calls).toHaveLength(2);
+    });
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("http://localhost:8000/auth/session");
     expect(init.method).toBe("POST");
     expect(init.credentials).toBe("include");
+
+    const [meUrl, meInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(meUrl).toBe("http://localhost:8000/auth/me");
+    expect(meInit.method).toBe("GET");
+    // Never sends the session cookie — `/auth/me` is authorised by the bearer token the restore
+    // just adopted, not by the single-use cookie `/auth/session` already spent.
+    expect(meInit.credentials).toBe("omit");
   });
 
   it("asks for a restore once per mount, not once per render", async () => {
@@ -172,6 +189,11 @@ describe("DashboardShell", () => {
       </DashboardShell>,
     );
     await screen.findByRole("navigation", { name: "Kayla Health dashboard" });
+    // The background `/auth/me` (see the test above) is fire-and-forget, so give it a tick to have
+    // actually gone out before asserting the steady-state call count below.
+    await waitFor(() => {
+      expect(fetchMock.mock.calls).toHaveLength(2);
+    });
 
     rerender(
       <DashboardShell>
@@ -181,8 +203,9 @@ describe("DashboardShell", () => {
 
     // A second `POST /auth/session` would present a cookie the first call already spent, which is
     // reuse detection's definition of a stolen token — the backend answers by revoking the whole
-    // refresh family and signing the account out everywhere.
-    expect(fetchMock.mock.calls).toHaveLength(1);
+    // refresh family and signing the account out everywhere. The background `/auth/me` is likewise
+    // asked exactly once per mount, not once per render — still 2 total, not 3, after the rerender.
+    expect(fetchMock.mock.calls).toHaveLength(2);
   });
 
   it("does not ask at all when a session is already in memory", () => {

@@ -303,7 +303,17 @@ describe("login screen — submitting", () => {
       expect(nav.replace).toHaveBeenCalledWith("/overview");
     });
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // Exactly one *login* request, plus one background `GET /auth/me`, deliberately not awaited
+    // (see below). This is a **deliberate** change (whitelabel scope-gap fix): `LoginForm` now
+    // fires a non-blocking `refreshSessionUserFromMe()` once login succeeds, because
+    // `POST /auth/login` never carries this org's real `org_name`/`org_logo_url` by contract —
+    // without it, an ordinary employee logging in would see default Kayla branding for the rest
+    // of their session. The count moved from 1 to 2 for that reason, not because this test's own
+    // one-login-request guarantee weakened: still exactly one `POST /auth/login`, and the second
+    // call is `GET /auth/me`.
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("http://localhost:8000/auth/login");
     expect(init.method).toBe("POST");

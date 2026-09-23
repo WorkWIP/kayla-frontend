@@ -57,16 +57,25 @@
  * follows the same on-disk convention: plain English JSX text.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 
 import { ApiError, CLIENT_ERROR_CODES, apiRequest, getSession } from "@/api/client";
 import type { components } from "@/api/generated";
+import type { LogoUploadHandle } from "@/components/logo-upload-field";
+import { LogoUploadField } from "@/components/logo-upload-field";
+import {
+  DISPLAY_NAME_MAX_LENGTH,
+  LogoSubmitError,
+  applyBrandingUpdate,
+  brandingErrorMessage,
+  saveBranding,
+} from "@/lib/branding";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
-import { NumberField } from "@/components/ui/field";
+import { NumberField, TextField } from "@/components/ui/field";
 import { AppPage } from "@/components/ui/app-page";
 import { PageHeader } from "@/components/ui/page-header";
 import { PageSkeleton } from "@/components/ui/skeleton";
@@ -76,9 +85,11 @@ type OrgSettingsUpdateRequest = components["schemas"]["OrgSettingsUpdateRequest"
 type AdminUserSummary = components["schemas"]["AdminUserSummary"];
 type PrivacyDisclosureResponse = components["schemas"]["PrivacyDisclosureResponse"];
 type CostOfTurnoverReferenceCard = components["schemas"]["CostOfTurnoverReferenceCard"];
+type BrandingResponse = components["schemas"]["BrandingResponse"];
 
 interface SettingsData {
   readonly settings: OrgSettingsResponse;
+  readonly branding: BrandingResponse;
   readonly adminUsers: readonly AdminUserSummary[];
   readonly privacyDisclosure: PrivacyDisclosureResponse;
   readonly costOfTurnover: CostOfTurnoverReferenceCard;
@@ -360,6 +371,219 @@ function ThresholdsSection({
 }
 
 /* -------------------------------------------------------------------------------------------
+ * 1a. Branding (whitelabel PRD Phase 2) — display name + logo, editable after onboarding
+ * ---------------------------------------------------------------------------------------- */
+
+const GENERIC_BRANDING_FAILURE = "Could not save branding. Try again in a moment.";
+
+type BrandingSaveState =
+  | { readonly status: "idle" }
+  | { readonly status: "saving" }
+  | { readonly status: "saved" }
+  | { readonly status: "error"; readonly message: string };
+
+function BrandingSection({
+  branding,
+  onSaved,
+}: {
+  readonly branding: BrandingResponse;
+  readonly onSaved: (next: BrandingResponse) => void;
+}) {
+  const [displayName, setDisplayName] = useState(branding.display_name);
+  const [hasLogoSelection, setHasLogoSelection] = useState(false);
+  const [saveState, setSaveState] = useState<BrandingSaveState>({ status: "idle" });
+  const logoRef = useRef<LogoUploadHandle>(null);
+
+  /**
+   * Whether `displayName` holds an edit the person has typed but not yet saved (code-review gate
+   * B5). Set on every keystroke, cleared once a save actually commits a name change. Read below to
+   * skip the prop resync while it's true — otherwise an unrelated success on this same form (e.g.
+   * "Remove logo", "Reset to default") would silently overwrite an in-progress, unsaved name edit
+   * the moment its own `branding` prop update lands, with no warning to the person who typed it.
+   */
+  const [hasUnsavedNameEdit, setHasUnsavedNameEdit] = useState(false);
+
+  // Same "adjusting state when a prop changes" pattern as `ThresholdsSection` above: a fresh
+  // `branding` object (this section's own save round-tripping, or a save made elsewhere) resets
+  // the draft rather than showing a value the server has already superseded — but only when there
+  // is no unsaved edit sitting in the field (B5): a save triggered by a *different* control on
+  // this form (logo remove/reset) must not discard text the person is still typing.
+  const [syncedBranding, setSyncedBranding] = useState(branding);
+  if (branding !== syncedBranding && !hasUnsavedNameEdit) {
+    setSyncedBranding(branding);
+    setDisplayName(branding.display_name);
+  }
+
+  const busy = saveState.status === "saving";
+  const trimmedName = displayName.trim();
+  const nameChanged = trimmedName !== "" && trimmedName !== branding.display_name;
+  const canSave = (nameChanged || hasLogoSelection) && !busy;
+
+  function handleNameChange(value: string) {
+    setDisplayName(value);
+    setHasUnsavedNameEdit(true);
+    if (saveState.status !== "idle") setSaveState({ status: "idle" });
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!canSave) return;
+
+    setSaveState({ status: "saving" });
+    try {
+      // `saveBranding` (`src/lib/branding.ts`) is the one save sequence this section shares with
+      // `org-branding-step.tsx`: logo first, applied to the session the instant it lands, then the
+      // name — so a logo that uploaded fine is never lost from the UI if the name PATCH that
+      // follows it then fails (code-review gate B1).
+      await saveBranding({
+        logo: logoRef.current,
+        displayNameToSave: nameChanged ? trimmedName : null,
+        onSaved,
+      });
+      if (nameChanged) setHasUnsavedNameEdit(false);
+      setSaveState({ status: "saved" });
+    } catch (error) {
+      if (error instanceof LogoSubmitError) {
+        // `LogoUploadField` already rendered its own inline alert for this exact failure — a
+        // second one here would announce it twice to a screen reader (code-review gate B7).
+        setSaveState({ status: "idle" });
+        return;
+      }
+      setSaveState({ status: "error", message: brandingErrorMessage(error, GENERIC_BRANDING_FAILURE) });
+    }
+  }
+
+  async function handleResetName() {
+    if (busy) return;
+    setSaveState({ status: "saving" });
+    try {
+      const latest = await apiRequest("patch", "/dashboard/settings/branding", {
+        body: { reset_display_name: true },
+      });
+      applyBrandingUpdate(latest, onSaved);
+      setSaveState({ status: "saved" });
+    } catch (error) {
+      setSaveState({ status: "error", message: brandingErrorMessage(error, GENERIC_BRANDING_FAILURE) });
+    }
+  }
+
+  async function handleRemoveLogo() {
+    if (busy) return;
+    setSaveState({ status: "saving" });
+    try {
+      const latest = await apiRequest("patch", "/dashboard/settings/branding", {
+        body: { remove_logo: true },
+      });
+      // Only clear the field when it has nothing pending — a logo the person picked but has not
+      // yet saved in this same form must not be silently discarded by an unrelated "Remove logo"
+      // success (code-review gate B6).
+      if (!logoRef.current?.hasSelection) logoRef.current?.reset();
+      applyBrandingUpdate(latest, onSaved);
+      setSaveState({ status: "saved" });
+    } catch (error) {
+      setSaveState({ status: "error", message: brandingErrorMessage(error, GENERIC_BRANDING_FAILURE) });
+    }
+  }
+
+  return (
+    <SectionCard
+      title="Branding"
+      subtitle="Your organization's display name and logo — shown to your own team instead of Kayla's, in the sidebar and browser tab."
+    >
+      <div className="flex flex-wrap items-center gap-8">
+        <Badge tone={branding.has_custom_branding ? "positive" : "neutral"}>
+          {branding.has_custom_branding ? "Custom branding" : "Using Kayla defaults"}
+        </Badge>
+        <span className="text-meta text-text-tertiary">{formatUpdatedAt(branding.updated_at)}</span>
+      </div>
+
+      <form
+        noValidate
+        aria-busy={busy}
+        onSubmit={(event) => {
+          void handleSubmit(event);
+        }}
+        className="flex flex-col gap-16"
+      >
+        <div className="flex flex-col gap-8 sm:flex-row sm:items-end sm:gap-12">
+          <div className="flex-1">
+            <TextField
+              id="settings-branding-display-name"
+              label="Display name"
+              value={displayName}
+              onValueChange={handleNameChange}
+              maxLength={DISPLAY_NAME_MAX_LENGTH}
+              disabled={busy}
+            />
+          </div>
+          {branding.has_custom_branding ? (
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              disabled={busy}
+              onClick={() => {
+                void handleResetName();
+              }}
+            >
+              Reset to default
+            </Button>
+          ) : null}
+        </div>
+
+        <LogoUploadField
+          uploadRef={logoRef}
+          currentLogoUrl={branding.logo_url}
+          disabled={busy}
+          onSelectionChange={setHasLogoSelection}
+        />
+
+        {branding.logo_url !== null ? (
+          <div className="flex flex-wrap gap-12">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              disabled={busy}
+              onClick={() => {
+                void handleRemoveLogo();
+              }}
+            >
+              Remove logo
+            </Button>
+          </div>
+        ) : null}
+
+        {saveState.status === "error" ? (
+          <div
+            role="alert"
+            className="flex flex-col gap-4 rounded-card border border-status-critical bg-status-critical-subtle p-16"
+          >
+            <p className="text-label font-bold text-text-primary">Could not save branding.</p>
+            <p className="text-copy text-text-primary">{saveState.message}</p>
+          </div>
+        ) : null}
+
+        <div className="flex items-center gap-12">
+          {/* "Save branding," not the Thresholds section's own "Save changes" — two same-named
+              buttons on one page would be indistinguishable to a screen-reader user navigating by
+              role and name, `settings/page.test.tsx` pins the Thresholds one by that exact name,
+              and the ambiguity is real, not just a test artifact. */}
+          <Button type="submit" disabled={!canSave} loading={busy} loadingLabel="Saving…">
+            Save branding
+          </Button>
+          {saveState.status === "saved" ? (
+            <span role="status" className="text-label font-bold text-status-positive">
+              Saved.
+            </span>
+          ) : null}
+        </div>
+      </form>
+    </SectionCard>
+  );
+}
+
+/* -------------------------------------------------------------------------------------------
  * 2. Admin users
  * ---------------------------------------------------------------------------------------- */
 
@@ -477,14 +701,18 @@ export default function SettingsPage() {
 
     async function load() {
       try {
-        const [settings, adminUsers, privacyDisclosure, costOfTurnover] = await Promise.all([
+        const [settings, branding, adminUsers, privacyDisclosure, costOfTurnover] = await Promise.all([
           apiRequest("get", "/dashboard/settings", {}),
+          apiRequest("get", "/dashboard/settings/branding", {}),
           apiRequest("get", "/dashboard/settings/admin-users", {}),
           apiRequest("get", "/dashboard/settings/privacy-disclosure", {}),
           apiRequest("get", "/dashboard/settings/cost-of-turnover", {}),
         ]);
         if (!cancelled) {
-          setState({ status: "loaded", data: { settings, adminUsers, privacyDisclosure, costOfTurnover } });
+          setState({
+            status: "loaded",
+            data: { settings, branding, adminUsers, privacyDisclosure, costOfTurnover },
+          });
         }
       } catch (error) {
         if (!cancelled) setState({ status: "error", message: messageFor(error) });
@@ -558,6 +786,16 @@ export default function SettingsPage() {
 
       {state.status === "loaded" ? (
         <>
+          <BrandingSection
+            branding={state.data.branding}
+            onSaved={(next) =>
+              setState((current) =>
+                current.status === "loaded"
+                  ? { status: "loaded", data: { ...current.data, branding: next } }
+                  : current,
+              )
+            }
+          />
           <ThresholdsSection
             settings={state.data.settings}
             onSaved={(next) =>

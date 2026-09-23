@@ -96,6 +96,13 @@ export interface SidebarNavUser {
    * `GET /auth/me` and org signup do — so the rail has to work without it.
    */
   readonly org_name?: string | null;
+  /**
+   * `AuthenticatedUser.org_logo_url` (whitelabel PRD Phase 2) — this org's uploaded logo, if any.
+   * Same nullability story as `org_name`: absent on a login-only session, populated by
+   * `GET /auth/me` and org signup/completion. `null`/absent renders the default Kayla mark via
+   * `OrgMark` below, never a broken image.
+   */
+  readonly org_logo_url?: string | null;
 }
 
 export interface SidebarNavProps {
@@ -384,6 +391,52 @@ function CloseGlyph() {
 }
 
 /**
+ * The brand block's mark: this org's own logo when it has uploaded one, the default Kayla mark
+ * otherwise — the one override point `sidebar-nav.tsx` already had for the *name* beside it
+ * (`orgName ?? BRAND_NAME`, below), extended to the mark itself (whitelabel PRD Phase 2).
+ *
+ * A plain `<img>`, not `next/image` or a CSS mask like `BrandMark`: an org's logo is an arbitrary
+ * uploaded image (any aspect ratio, any of the three allowed formats) served from whichever
+ * object-storage host this deployment's backend uses, not a single local asset this app ships —
+ * neither `next/image`'s remote-hostname allowlist nor `BrandMark`'s alpha-channel mask apply to
+ * it. `object-contain` inside the same `size-40` box `BrandMark` itself renders at keeps the rail
+ * from visibly resizing depending on whose logo is showing.
+ *
+ * `onError` — not a `try`/`catch`, since a broken image URL is a load failure the browser reports
+ * asynchronously — falls back to `BrandMark` rather than leaving the classic broken-image icon in
+ * the rail.
+ *
+ * `failed` is `OrgMark`'s own component state, so a `key` on the `<img>` alone (a version this
+ * once shipped with) does nothing for it: remounting the *host element* does not reset a hook
+ * belonging to its *parent* function component, and the `logoUrl === null || failed` check above
+ * that `<img>` still short-circuits to `BrandMark` forever after the first failure, before a fresh
+ * `<img>` ever gets a chance to load the org's new URL (code-review gate B3 — a failed logo load
+ * would otherwise permanently fall back to the default mark for the rest of the mount, even after
+ * the org owner uploads a working replacement). The caller below keys the whole `OrgMark`
+ * component by `logoUrl` instead, which remounts `OrgMark` itself — and every hook in it,
+ * `failed` included — back to its initial state whenever the URL actually changes. See
+ * `kayla-mobile`'s `src/app/index.tsx` for the same fix applied to its own org-logo `<Image>`.
+ */
+function OrgMark({ logoUrl }: { readonly logoUrl: string | null }) {
+  const [failed, setFailed] = useState(false);
+
+  if (logoUrl === null || failed) {
+    return <BrandMark size="md" />;
+  }
+
+  return (
+    // eslint-disable-next-line @next/next/no-img-element -- remote per-org logo, no static domain to allowlist
+    <img
+      src={logoUrl}
+      alt=""
+      aria-hidden="true"
+      onError={() => setFailed(true)}
+      className="block size-40 shrink-0 object-contain"
+    />
+  );
+}
+
+/**
  * The 232-wide rail. 232 has no token of its own, so it is built from two that do
  * (64*3 + 40 = 232) rather than written as a bare literal — R5 stays a compiler-checked property
  * here, not a promise kept by eye. 64 (collapsed / icons-only) is `--spacing-64` directly.
@@ -488,6 +541,7 @@ export function SidebarNav({ user, mobileOpen = false, onMobileClose }: SidebarN
   }
 
   const orgName = user.org_name ?? null;
+  const orgLogoUrl = user.org_logo_url ?? null;
 
   function renderNavLink(item: NavItem) {
     const active = isActiveHref(pathname, item.href);
@@ -569,7 +623,10 @@ export function SidebarNav({ user, mobileOpen = false, onMobileClose }: SidebarN
               aria-label={collapsed ? "Expand navigation" : "Collapse navigation"}
               className="flex size-48 shrink-0 items-center justify-center rounded-control transition-colors duration-[var(--duration-fast)] ease-standard hover:bg-surface-warm-gray focus-visible:outline-hidden focus-visible:inset-shadow-focus-plum"
             >
-              <BrandMark size="md" />
+              {/* Keyed by the URL itself, not just passed as a prop — see `OrgMark`'s own
+                  docstring for why the component has to remount, not merely re-render, for a
+                  fresh logo URL to get a fresh chance to load after an earlier one failed. */}
+              <OrgMark key={orgLogoUrl ?? "default"} logoUrl={orgLogoUrl} />
             </button>
             <div
               className={[

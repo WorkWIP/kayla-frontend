@@ -56,7 +56,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
-import { getSession, restoreSessionOnce } from "@/api/client";
+import { getSession, restoreSessionOnce, subscribeToSessionChanges } from "@/api/client";
 import type { ActiveSession } from "@/api/client";
 
 /** Where an unauthenticated visitor to a dashboard route is sent. */
@@ -118,6 +118,30 @@ export function useAuthenticatedSession(): SessionState {
       router.replace(LOGIN_ROUTE);
     }
   }, [state.status, router]);
+
+  /**
+   * Keep `state.session` in step with `SESSION` while signed in (whitelabel Phase 2).
+   *
+   * `SESSION` (`src/api/client.ts`) is a plain module variable, not React state — `setState`
+   * above only ever runs it through this hook's own two call sites (adopting a restore, or the
+   * initial `fromStore()` read). A Settings-page branding save calls `updateSessionUser` directly
+   * on that module variable while this hook's `state` is already sitting in `signed-in` from an
+   * earlier render, and without this subscription nothing would tell this component to read it
+   * again — the sidebar/tab-title would keep the stale name/logo until a full remount (a
+   * navigation from outside the dashboard, or a reload). This closes exactly that gap: the org
+   * owner's own edit reaches the rail immediately, mid-session, with no navigation required.
+   */
+  useEffect(() => {
+    if (state.status !== "signed-in") return;
+    return subscribeToSessionChanges(() => {
+      const latest = getSession();
+      // `null` (a sign-out racing this subscription) is left alone rather than forced into
+      // `signed-out` here — `clearSession`'s own callers already own navigating away, and this
+      // effect's only job is keeping a *session that still exists* fresh, not re-deciding whether
+      // one does.
+      if (latest !== null) setState({ status: "signed-in", session: latest });
+    });
+  }, [state.status]);
 
   return state;
 }

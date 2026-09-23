@@ -103,6 +103,18 @@ function setPassword(password: string, confirm = password) {
   fireEvent.click(screen.getByRole("button", { name: "Create organization" }));
 }
 
+/**
+ * `POST /orgs/signup/complete` no longer redirects to `/overview` on its own — the
+ * mandatory-but-skippable branding step (whitelabel PRD Phase 2, `org-branding-step.tsx`) renders
+ * first. "Skip for now" makes no network request at all, so it is the fastest way to reach the
+ * redirect this file's own tests are really about, without also having to mock the branding
+ * endpoints for tests that are not about branding.
+ */
+async function skipBrandingStep() {
+  await screen.findByRole("heading", { name: "Make it yours" });
+  fireEvent.click(screen.getByRole("button", { name: "Skip for now" }));
+}
+
 beforeEach(() => {
   nav.replace.mockReset();
   nav.push.mockReset();
@@ -243,6 +255,8 @@ describe("/signup/verify — setting the password", () => {
     await reachPasswordStep();
     setPassword("correct horse battery staple");
 
+    await skipBrandingStep();
+
     await waitFor(() => {
       expect(nav.replace).toHaveBeenCalledWith("/overview");
     });
@@ -291,6 +305,7 @@ describe("/signup/verify — setting the password", () => {
 
     // And the retry spends the same token.
     setPassword("a much better passphrase here");
+    await skipBrandingStep();
     await waitFor(() => {
       expect(nav.replace).toHaveBeenCalledWith("/overview");
     });

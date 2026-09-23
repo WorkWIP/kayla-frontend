@@ -53,7 +53,14 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useId, useRef, useState } from "react";
 import type { FormEvent } from "react";
 
-import { ApiError, CLIENT_ERROR_CODES, apiRequest, clearSession, setSession } from "@/api/client";
+import {
+  ApiError,
+  CLIENT_ERROR_CODES,
+  apiRequest,
+  clearSession,
+  refreshSessionUserFromMe,
+  setSession,
+} from "@/api/client";
 import type { UserRole } from "@/api/client";
 import { Button } from "@/components/ui/button";
 import { TextField } from "@/components/ui/field";
@@ -265,6 +272,11 @@ export function LoginForm() {
       }
 
       setSession(session);
+      // Non-blocking — see `refreshSessionUserFromMe`'s own docstring (whitelabel scope gap fix).
+      // `POST /auth/login` never carries this org's real `org_name`/`org_logo_url` by contract, so
+      // without this an ordinary employee would see default Kayla branding for the rest of their
+      // session; this fetches the real values in the background and must not delay the redirect.
+      void refreshSessionUserFromMe();
       router.replace(POST_LOGIN_DESTINATION);
     } catch (error) {
       setFailure(messageFor(error));
