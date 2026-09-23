@@ -82,9 +82,10 @@
  */
 
 import { usePathname } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 
+import { BRAND_NAME } from "@/components/brand-wordmark";
 import { SidebarNav, findActiveNavItem } from "@/components/sidebar-nav";
 import { PageSkeleton } from "@/components/ui/skeleton";
 import { useAuthenticatedSession } from "@/lib/session";
@@ -163,6 +164,31 @@ export function DashboardShell({ children }: DashboardShellProps) {
     setDrawer({ open: false, at: pathname });
   }
   const mobileNavOpen = drawer.open;
+
+  /**
+   * The dashboard's browser-tab title (whitelabel PRD Phase 2): this org's own display name once
+   * signed in, `BRAND_NAME` otherwise — the same `org_name ?? BRAND_NAME` fallback the rail
+   * itself uses, so the tab and the sidebar can never disagree about whose dashboard this is.
+   *
+   * No per-page title exists to preserve here: every dashboard route is a client component with
+   * no `export const metadata` of its own, so the root layout's static "Kayla Health" is the only
+   * title any dashboard route has ever shown, page-independent. This effect keeps that same
+   * page-independent granularity and only swaps the *name*, which is why it depends on the
+   * session rather than on `pathname`.
+   *
+   * Deliberately called unconditionally, above the `restoring`/`signed-out` early returns below —
+   * an effect placed after them would run on some renders of this component and not others,
+   * which is exactly the hook-order violation React's rules exist to catch. The body itself does
+   * the narrowing instead. No cleanup resets the title on unmount: leaving the dashboard entirely
+   * means navigating to a route with its own real `metadata.title` (agents.md's marketing/auth
+   * pages all have one), and the App Router's own client-side navigation already applies that
+   * title on arrival — this effect does not need to race it.
+   */
+  useEffect(() => {
+    if (sessionState.status === "signed-in") {
+      document.title = sessionState.session.user.org_name ?? BRAND_NAME;
+    }
+  }, [sessionState]);
 
   // "We are asking" is not "no". Rendering nothing here — which is what this did while the session
   // read was synchronous — would flash an empty page on every legitimate reload; redirecting here
