@@ -170,6 +170,32 @@ let SESSION: ActiveSession | null = null;
 let inFlightRestore: Promise<ActiveSession | null> | null = null;
 
 /**
+ * Who to tell when `SESSION` changes — `src/lib/session.ts`'s `useAuthenticatedSession`, and
+ * nothing else today.
+ *
+ * Exists for `updateSessionUser` (whitelabel Phase 2): `SESSION` is a plain module variable, not
+ * React state, so mutating it in place — which is exactly what a Settings-page branding save does
+ * while the dashboard is already mounted and showing the *old* name/logo — would otherwise be
+ * invisible to whichever component last read `getSession()` into its own `useState`. `setSession`
+ * and `clearSession` notify too, for the same reason, even though today's only subscriber already
+ * happens to re-derive its state around both of those through other means (a fresh mount, or the
+ * `useAuthenticatedSession` restore effect) — a second subscriber should not have to know that.
+ */
+const sessionListeners = new Set<() => void>();
+
+function notifySessionChange(): void {
+  for (const listener of sessionListeners) listener();
+}
+
+/** Subscribe to every `SESSION` change. Returns the unsubscribe function. */
+export function subscribeToSessionChanges(listener: () => void): () => void {
+  sessionListeners.add(listener);
+  return () => {
+    sessionListeners.delete(listener);
+  };
+}
+
+/**
  * Adopt a session returned by `/auth/login`, `/auth/signup/set-password` or
  * `/orgs/signup/complete`. Memory only, and **minus the refresh token** — see `ActiveSession`.
  */
@@ -185,11 +211,33 @@ export function setSession(session: Session): void {
     },
     user: session.user,
   };
+  notifySessionChange();
 }
 
 /** The current session, or null when signed out. */
 export function getSession(): ActiveSession | null {
   return SESSION;
+}
+
+/**
+ * Patch fields of the signed-in user in place, without touching `tokens`.
+ *
+ * Exists for the whitelabel branding surface: `org-branding-step.tsx` (the onboarding step) and
+ * `(dashboard)/settings/page.tsx`'s Branding section both write `org_name`/`org_logo_url` through
+ * `PATCH`/`POST .../logo/confirm`, and the response is the new source of truth for those two
+ * fields — but the session in memory was built from an earlier `/auth/me` or signup response and
+ * has no way to learn about it on its own. Without this, the sidebar and the dashboard tab title
+ * would keep showing the *previous* name/logo (or the Kayla default) until the next full session
+ * restore, which is exactly the "immediately see it reflected... without needing to re-login" gap
+ * the whitelabel PRD's Phase 2 acceptance criteria calls out by name.
+ *
+ * A no-op when there is no session to patch — a save that outraces a sign-out has nothing left to
+ * update, and that is not this function's failure to report.
+ */
+export function updateSessionUser(patch: Partial<AuthenticatedUser>): void {
+  if (SESSION === null) return;
+  SESSION = { tokens: SESSION.tokens, user: { ...SESSION.user, ...patch } };
+  notifySessionChange();
 }
 
 /**
@@ -202,6 +250,7 @@ export function getSession(): ActiveSession | null {
 export function clearSession(): void {
   SESSION = null;
   inFlightRestore = null;
+  notifySessionChange();
 }
 
 /**
@@ -235,6 +284,7 @@ export async function restoreSession(options: RequestOptions = {}): Promise<Acti
       },
       user: restored.user,
     };
+    notifySessionChange();
     return SESSION;
   } catch {
     clearSession();
