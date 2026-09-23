@@ -57,16 +57,18 @@
  * follows the same on-disk convention: plain English JSX text.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 
-import { ApiError, CLIENT_ERROR_CODES, apiRequest, getSession } from "@/api/client";
+import { ApiError, CLIENT_ERROR_CODES, apiRequest, getSession, updateSessionUser } from "@/api/client";
 import type { components } from "@/api/generated";
+import type { LogoUploadHandle } from "@/components/logo-upload-field";
+import { LogoUploadField } from "@/components/logo-upload-field";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
-import { NumberField } from "@/components/ui/field";
+import { NumberField, TextField } from "@/components/ui/field";
 import { AppPage } from "@/components/ui/app-page";
 import { PageHeader } from "@/components/ui/page-header";
 import { PageSkeleton } from "@/components/ui/skeleton";
@@ -76,9 +78,11 @@ type OrgSettingsUpdateRequest = components["schemas"]["OrgSettingsUpdateRequest"
 type AdminUserSummary = components["schemas"]["AdminUserSummary"];
 type PrivacyDisclosureResponse = components["schemas"]["PrivacyDisclosureResponse"];
 type CostOfTurnoverReferenceCard = components["schemas"]["CostOfTurnoverReferenceCard"];
+type BrandingResponse = components["schemas"]["BrandingResponse"];
 
 interface SettingsData {
   readonly settings: OrgSettingsResponse;
+  readonly branding: BrandingResponse;
   readonly adminUsers: readonly AdminUserSummary[];
   readonly privacyDisclosure: PrivacyDisclosureResponse;
   readonly costOfTurnover: CostOfTurnoverReferenceCard;
@@ -360,6 +364,217 @@ function ThresholdsSection({
 }
 
 /* -------------------------------------------------------------------------------------------
+ * 1a. Branding (whitelabel PRD Phase 2) — display name + logo, editable after onboarding
+ * ---------------------------------------------------------------------------------------- */
+
+const DISPLAY_NAME_MAX_LENGTH = 200;
+
+type BrandingSaveState =
+  | { readonly status: "idle" }
+  | { readonly status: "saving" }
+  | { readonly status: "saved" }
+  | { readonly status: "error"; readonly message: string };
+
+/**
+ * Every write here (name edit, name reset, logo replace, logo remove) shares one shape: call one
+ * or two of `PATCH /dashboard/settings/branding` / the logo upload flow, feed the resulting
+ * `BrandingResponse` back into `onSaved` (so the section's own draft resyncs) and into
+ * `updateSessionUser` (so the sidebar/tab-title reflect it immediately — see that function's own
+ * docstring and `org-branding-step.tsx`'s, which states the same "no re-login required"
+ * acceptance criterion this section has to meet for a *post*-onboarding edit too).
+ */
+function applyBranding(
+  latest: BrandingResponse,
+  onSaved: (next: BrandingResponse) => void,
+): void {
+  onSaved(latest);
+  updateSessionUser({ org_name: latest.display_name, org_logo_url: latest.logo_url ?? null });
+}
+
+function BrandingSection({
+  branding,
+  onSaved,
+}: {
+  readonly branding: BrandingResponse;
+  readonly onSaved: (next: BrandingResponse) => void;
+}) {
+  const [displayName, setDisplayName] = useState(branding.display_name);
+  const [hasLogoSelection, setHasLogoSelection] = useState(false);
+  const [saveState, setSaveState] = useState<BrandingSaveState>({ status: "idle" });
+  const logoRef = useRef<LogoUploadHandle>(null);
+
+  // Same "adjusting state when a prop changes" pattern as `ThresholdsSection` above: a fresh
+  // `branding` object (this section's own save round-tripping, or a save made elsewhere) resets
+  // the draft rather than showing a value the server has already superseded.
+  const [syncedBranding, setSyncedBranding] = useState(branding);
+  if (branding !== syncedBranding) {
+    setSyncedBranding(branding);
+    setDisplayName(branding.display_name);
+  }
+
+  const busy = saveState.status === "saving";
+  const trimmedName = displayName.trim();
+  const nameChanged = trimmedName !== "" && trimmedName !== branding.display_name;
+  const canSave = (nameChanged || hasLogoSelection) && !busy;
+
+  function handleNameChange(value: string) {
+    setDisplayName(value);
+    if (saveState.status !== "idle") setSaveState({ status: "idle" });
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!canSave) return;
+
+    setSaveState({ status: "saving" });
+    try {
+      // The logo first, matching `org-branding-step.tsx`'s own ordering rationale: the slower,
+      // more failure-prone request goes first, and a failure here stops the name PATCH from firing
+      // on top of it rather than silently dropping one half of a two-field save.
+      const uploaded = await logoRef.current?.submit();
+      let latest = uploaded ?? null;
+
+      if (nameChanged) {
+        latest = await apiRequest("patch", "/dashboard/settings/branding", {
+          body: { display_name: trimmedName },
+        });
+      }
+
+      if (latest !== null) applyBranding(latest, onSaved);
+      setSaveState({ status: "saved" });
+    } catch (error) {
+      setSaveState({ status: "error", message: messageFor(error) });
+    }
+  }
+
+  async function handleResetName() {
+    if (busy) return;
+    setSaveState({ status: "saving" });
+    try {
+      const latest = await apiRequest("patch", "/dashboard/settings/branding", {
+        body: { reset_display_name: true },
+      });
+      applyBranding(latest, onSaved);
+      setSaveState({ status: "saved" });
+    } catch (error) {
+      setSaveState({ status: "error", message: messageFor(error) });
+    }
+  }
+
+  async function handleRemoveLogo() {
+    if (busy) return;
+    setSaveState({ status: "saving" });
+    try {
+      const latest = await apiRequest("patch", "/dashboard/settings/branding", {
+        body: { remove_logo: true },
+      });
+      logoRef.current?.reset();
+      applyBranding(latest, onSaved);
+      setSaveState({ status: "saved" });
+    } catch (error) {
+      setSaveState({ status: "error", message: messageFor(error) });
+    }
+  }
+
+  return (
+    <SectionCard
+      title="Branding"
+      subtitle="Your organization's display name and logo — shown to your own team instead of Kayla's, in the sidebar and browser tab."
+    >
+      <div className="flex flex-wrap items-center gap-8">
+        <Badge tone={branding.has_custom_branding ? "positive" : "neutral"}>
+          {branding.has_custom_branding ? "Custom branding" : "Using Kayla defaults"}
+        </Badge>
+        <span className="text-meta text-text-tertiary">{formatUpdatedAt(branding.updated_at)}</span>
+      </div>
+
+      <form
+        noValidate
+        aria-busy={busy}
+        onSubmit={(event) => {
+          void handleSubmit(event);
+        }}
+        className="flex flex-col gap-16"
+      >
+        <div className="flex flex-col gap-8 sm:flex-row sm:items-end sm:gap-12">
+          <div className="flex-1">
+            <TextField
+              id="settings-branding-display-name"
+              label="Display name"
+              value={displayName}
+              onValueChange={handleNameChange}
+              maxLength={DISPLAY_NAME_MAX_LENGTH}
+              disabled={busy}
+            />
+          </div>
+          {branding.has_custom_branding ? (
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              disabled={busy}
+              onClick={() => {
+                void handleResetName();
+              }}
+            >
+              Reset to default
+            </Button>
+          ) : null}
+        </div>
+
+        <LogoUploadField
+          uploadRef={logoRef}
+          currentLogoUrl={branding.logo_url}
+          disabled={busy}
+          onSelectionChange={setHasLogoSelection}
+        />
+
+        {branding.logo_url !== null ? (
+          <div className="flex flex-wrap gap-12">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              disabled={busy}
+              onClick={() => {
+                void handleRemoveLogo();
+              }}
+            >
+              Remove logo
+            </Button>
+          </div>
+        ) : null}
+
+        {saveState.status === "error" ? (
+          <div
+            role="alert"
+            className="flex flex-col gap-4 rounded-card border border-status-critical bg-status-critical-subtle p-16"
+          >
+            <p className="text-label font-bold text-text-primary">Could not save branding.</p>
+            <p className="text-copy text-text-primary">{saveState.message}</p>
+          </div>
+        ) : null}
+
+        <div className="flex items-center gap-12">
+          {/* "Save branding," not the Thresholds section's own "Save changes" — two same-named
+              buttons on one page would be indistinguishable to a screen-reader user navigating by
+              role and name, `settings/page.test.tsx` pins the Thresholds one by that exact name,
+              and the ambiguity is real, not just a test artifact. */}
+          <Button type="submit" disabled={!canSave} loading={busy} loadingLabel="Saving…">
+            Save branding
+          </Button>
+          {saveState.status === "saved" ? (
+            <span role="status" className="text-label font-bold text-status-positive">
+              Saved.
+            </span>
+          ) : null}
+        </div>
+      </form>
+    </SectionCard>
+  );
+}
+
+/* -------------------------------------------------------------------------------------------
  * 2. Admin users
  * ---------------------------------------------------------------------------------------- */
 
@@ -477,14 +692,18 @@ export default function SettingsPage() {
 
     async function load() {
       try {
-        const [settings, adminUsers, privacyDisclosure, costOfTurnover] = await Promise.all([
+        const [settings, branding, adminUsers, privacyDisclosure, costOfTurnover] = await Promise.all([
           apiRequest("get", "/dashboard/settings", {}),
+          apiRequest("get", "/dashboard/settings/branding", {}),
           apiRequest("get", "/dashboard/settings/admin-users", {}),
           apiRequest("get", "/dashboard/settings/privacy-disclosure", {}),
           apiRequest("get", "/dashboard/settings/cost-of-turnover", {}),
         ]);
         if (!cancelled) {
-          setState({ status: "loaded", data: { settings, adminUsers, privacyDisclosure, costOfTurnover } });
+          setState({
+            status: "loaded",
+            data: { settings, branding, adminUsers, privacyDisclosure, costOfTurnover },
+          });
         }
       } catch (error) {
         if (!cancelled) setState({ status: "error", message: messageFor(error) });
@@ -558,6 +777,16 @@ export default function SettingsPage() {
 
       {state.status === "loaded" ? (
         <>
+          <BrandingSection
+            branding={state.data.branding}
+            onSaved={(next) =>
+              setState((current) =>
+                current.status === "loaded"
+                  ? { status: "loaded", data: { ...current.data, branding: next } }
+                  : current,
+              )
+            }
+          />
           <ThresholdsSection
             settings={state.data.settings}
             onSaved={(next) =>

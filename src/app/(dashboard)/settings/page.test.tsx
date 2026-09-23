@@ -15,6 +15,7 @@ import type { components } from "@/api/generated";
 import SettingsPage from "./page";
 
 type OrgSettingsResponse = components["schemas"]["OrgSettingsResponse"];
+type BrandingResponse = components["schemas"]["BrandingResponse"];
 
 function jsonResponse(status: number, body: unknown): Response {
   return {
@@ -62,6 +63,14 @@ const SETTINGS: OrgSettingsResponse = {
   updated_at: null,
 };
 
+const BRANDING: BrandingResponse = {
+  org_id: "9f1c2b3a-0000-4000-8000-000000000001",
+  display_name: "Sunrise Home Care",
+  logo_url: null,
+  has_custom_branding: false,
+  updated_at: null,
+};
+
 const ADMIN_USERS = [
   {
     id: "a1",
@@ -104,7 +113,10 @@ const COST_OF_TURNOVER = {
 
 const fetchMock = vi.fn();
 
-function mockSettingsBackend(settings: OrgSettingsResponse = SETTINGS) {
+function mockSettingsBackend(
+  settings: OrgSettingsResponse = SETTINGS,
+  branding: BrandingResponse = BRANDING,
+) {
   fetchMock.mockImplementation((url: string) => {
     if (url.endsWith("/dashboard/settings/admin-users")) {
       return Promise.resolve(jsonResponse(200, ADMIN_USERS));
@@ -114,6 +126,12 @@ function mockSettingsBackend(settings: OrgSettingsResponse = SETTINGS) {
     }
     if (url.endsWith("/dashboard/settings/cost-of-turnover")) {
       return Promise.resolve(jsonResponse(200, COST_OF_TURNOVER));
+    }
+    // More specific first: "/dashboard/settings/branding" also ends with "/dashboard/settings"'s
+    // own suffix pattern would not match here since `endsWith` is exact, but keeping the specific
+    // branding check ahead of the bare settings one documents the ordering this depends on.
+    if (url.endsWith("/dashboard/settings/branding")) {
+      return Promise.resolve(jsonResponse(200, branding));
     }
     if (url.endsWith("/dashboard/settings")) {
       return Promise.resolve(jsonResponse(200, settings));
@@ -144,7 +162,7 @@ describe("Settings page — role gating", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("loads all four sections for an org_owner session", async () => {
+  it("loads all five sections for an org_owner session", async () => {
     setSession(ORG_OWNER_SESSION);
     mockSettingsBackend();
 
@@ -156,6 +174,9 @@ describe("Settings page — role gating", () => {
       expect(screen.getByText("Admin users")).toBeDefined();
     });
 
+    expect(screen.getByText("Branding")).toBeDefined();
+    expect(screen.getByDisplayValue(BRANDING.display_name)).toBeDefined();
+    expect(screen.getByText("Using Kayla defaults")).toBeDefined();
     expect(screen.getByDisplayValue("4")).toBeDefined(); // min_n_threshold
     expect(screen.getByText("owner@example.com")).toBeDefined();
     expect(screen.getByText("hr@example.com")).toBeDefined();
