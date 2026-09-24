@@ -225,12 +225,13 @@ export function DashboardShell({ children }: DashboardShellProps) {
           >
             <MenuGlyph />
           </button>
-          {/* A trail, not a title: the product, then where in it you are. The page's own `<h1>`
-              says the same thing louder a moment below, which is why the whole line is hidden
-              from assistive technology rather than read out twice. */}
+          {/* A trail, not a title: the org (whitelabelled, same `org_name ?? BRAND_NAME`
+              fallback as the rail and the tab title), then where in it you are. The page's own
+              `<h1>` says the same thing louder a moment below, which is why the whole line is
+              hidden from assistive technology rather than read out twice. */}
           <p aria-hidden="true" className="flex min-w-[0] items-center gap-8">
             <span className="shrink-0 text-eyebrow font-bold uppercase tracking-eyebrow text-text-tertiary">
-              Kayla Health
+              {session.user.org_name ?? BRAND_NAME}
             </span>
             {activeItem === null ? null : (
               <>

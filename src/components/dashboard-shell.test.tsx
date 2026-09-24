@@ -232,9 +232,34 @@ describe("DashboardShell", () => {
       </DashboardShell>,
     );
 
-    expect(screen.getByRole("navigation", { name: "Kayla Health dashboard" })).toBeDefined();
-    expect(screen.getByText("Okemah Community Care")).toBeDefined();
+    const rail = screen.getByRole("navigation", { name: "Kayla Health dashboard" });
+    expect(within(rail).getByText("Okemah Community Care")).toBeDefined();
     expect(within(screen.getByRole("main")).getByText("page body")).toBeDefined();
+  });
+
+  it("names the org, not the product, at the head of the top bar's breadcrumb", () => {
+    setSession(SESSION);
+    const { container } = render(
+      <DashboardShell>
+        <p>page body</p>
+      </DashboardShell>,
+    );
+
+    const topBar = container.querySelector("header");
+    expect(within(topBar as HTMLElement).getByText("Okemah Community Care")).toBeDefined();
+    expect(within(topBar as HTMLElement).queryByText("Kayla Health")).toBeNull();
+  });
+
+  it("falls back to the product name in the breadcrumb for an org with no name of its own", () => {
+    setSession({ ...SESSION, user: { ...USER, org_name: null } });
+    const { container } = render(
+      <DashboardShell>
+        <p>page body</p>
+      </DashboardShell>,
+    );
+
+    const topBar = container.querySelector("header");
+    expect(within(topBar as HTMLElement).getByText("Kayla Health")).toBeDefined();
   });
 
   it("names the current page in the top bar, from the same match the rail marks current", () => {
