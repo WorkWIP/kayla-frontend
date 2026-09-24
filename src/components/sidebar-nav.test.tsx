@@ -176,11 +176,19 @@ describe("SidebarNav", () => {
     expect(screen.getByRole("link", { name: "Signals" }).getAttribute("aria-current")).toBeNull();
   });
 
-  it("names the nav landmark and shows the signed-in user's email and role", () => {
+  it("names the nav landmark after the org, and shows the signed-in user's email and role", () => {
+    render(<SidebarNav user={{ ...USER, org_name: "Okemah Community Care" }} />);
+
+    expect(
+      screen.getByRole("navigation", { name: "Okemah Community Care dashboard" }),
+    ).toBeDefined();
+    expect(screen.getByText(/hr@example.com/)).toBeDefined();
+  });
+
+  it("falls back to the product name for the nav landmark when org_name is null", () => {
     render(<SidebarNav user={USER} />);
 
     expect(screen.getByRole("navigation", { name: "Kayla Health dashboard" })).toBeDefined();
-    expect(screen.getByText(/hr@example.com/)).toBeDefined();
   });
 });
 

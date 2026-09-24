@@ -18,7 +18,14 @@
  * the whole refresh family).
  */
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { clearSession, setSession } from "@/api/client";
@@ -93,7 +100,9 @@ beforeEach(() => {
   // The default for the tests that are about layout rather than about the boot: there is no cookie,
   // so the restore fails and the shell settles on signed-out — which is the state those tests then
   // move past by calling `setSession` before rendering.
-  fetchMock.mockResolvedValue(jsonResponse(401, { error: { code: "unauthorized", message: "no" } }));
+  fetchMock.mockResolvedValue(
+    jsonResponse(401, { error: { code: "unauthorized", message: "no" } }),
+  );
   vi.stubGlobal("fetch", fetchMock);
   try {
     window.localStorage.clear();
@@ -152,8 +161,14 @@ describe("DashboardShell", () => {
     );
 
     // The product requirement: a reload keeps the session it would otherwise have destroyed.
-    expect(await screen.findByRole("navigation", { name: "Kayla Health dashboard" })).toBeDefined();
-    expect(within(screen.getByRole("main")).getByText("page body")).toBeDefined();
+    expect(
+      await screen.findByRole("navigation", {
+        name: "Okemah Community Care dashboard",
+      }),
+    ).toBeDefined();
+    expect(
+      within(screen.getByRole("main")).getByText("page body"),
+    ).toBeDefined();
     expect(nav.replace).not.toHaveBeenCalled();
 
     // Exactly one *session-restoring* request, to the one endpoint the cookie's Path admits, with
@@ -188,7 +203,9 @@ describe("DashboardShell", () => {
         <p>page body</p>
       </DashboardShell>,
     );
-    await screen.findByRole("navigation", { name: "Kayla Health dashboard" });
+    await screen.findByRole("navigation", {
+      name: "Okemah Community Care dashboard",
+    });
     // The background `/auth/me` (see the test above) is fire-and-forget, so give it a tick to have
     // actually gone out before asserting the steady-state call count below.
     await waitFor(() => {
@@ -219,7 +236,11 @@ describe("DashboardShell", () => {
 
     // Signing in and navigating to the dashboard must not produce a skeleton frame, and must not
     // spend a cookie to learn something the app already knows.
-    expect(screen.getByRole("navigation", { name: "Kayla Health dashboard" })).toBeDefined();
+    expect(
+      screen.getByRole("navigation", {
+        name: "Okemah Community Care dashboard",
+      }),
+    ).toBeDefined();
     expect(screen.queryByRole("status")).toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -232,9 +253,44 @@ describe("DashboardShell", () => {
       </DashboardShell>,
     );
 
-    expect(screen.getByRole("navigation", { name: "Kayla Health dashboard" })).toBeDefined();
-    expect(screen.getByText("Okemah Community Care")).toBeDefined();
-    expect(within(screen.getByRole("main")).getByText("page body")).toBeDefined();
+    const rail = screen.getByRole("navigation", {
+      name: "Okemah Community Care dashboard",
+    });
+    expect(within(rail).getByText("Okemah Community Care")).toBeDefined();
+    expect(
+      within(screen.getByRole("main")).getByText("page body"),
+    ).toBeDefined();
+  });
+
+  it("names the org, not the product, at the head of the top bar's breadcrumb", () => {
+    setSession(SESSION);
+    const { container } = render(
+      <DashboardShell>
+        <p>page body</p>
+      </DashboardShell>,
+    );
+
+    const topBar = container.querySelector("header");
+    expect(
+      within(topBar as HTMLElement).getByText("Okemah Community Care"),
+    ).toBeDefined();
+    expect(
+      within(topBar as HTMLElement).queryByText("Kayla Health"),
+    ).toBeNull();
+  });
+
+  it("falls back to the product name in the breadcrumb for an org with no name of its own", () => {
+    setSession({ ...SESSION, user: { ...USER, org_name: null } });
+    const { container } = render(
+      <DashboardShell>
+        <p>page body</p>
+      </DashboardShell>,
+    );
+
+    const topBar = container.querySelector("header");
+    expect(
+      within(topBar as HTMLElement).getByText("Kayla Health"),
+    ).toBeDefined();
   });
 
   it("names the current page in the top bar, from the same match the rail marks current", () => {
@@ -249,7 +305,9 @@ describe("DashboardShell", () => {
     const topBar = container.querySelector("header");
     expect(topBar?.textContent).toContain("Knowledge Base");
     expect(
-      screen.getByRole("link", { name: "Knowledge Base" }).getAttribute("aria-current"),
+      screen
+        .getByRole("link", { name: "Knowledge Base" })
+        .getAttribute("aria-current"),
     ).toBe("page");
   });
 
@@ -263,8 +321,12 @@ describe("DashboardShell", () => {
 
     const topBar = container.querySelector("header");
     expect(topBar).not.toBeNull();
-    expect(within(topBar as HTMLElement).queryByRole("button", { name: "Sign out" })).toBeNull();
-    expect(within(topBar as HTMLElement).queryByRole("link", { name: "Settings" })).toBeNull();
+    expect(
+      within(topBar as HTMLElement).queryByRole("button", { name: "Sign out" }),
+    ).toBeNull();
+    expect(
+      within(topBar as HTMLElement).queryByRole("link", { name: "Settings" }),
+    ).toBeNull();
 
     // …and exactly one of each, in the rail.
     expect(screen.getAllByRole("button", { name: "Sign out" })).toHaveLength(1);
@@ -281,17 +343,25 @@ describe("DashboardShell", () => {
 
     const hamburger = screen.getByRole("button", { name: "Open navigation" });
     expect(hamburger.getAttribute("aria-expanded")).toBe("false");
-    expect(screen.queryAllByRole("button", { name: "Close navigation" })).toHaveLength(0);
+    expect(
+      screen.queryAllByRole("button", { name: "Close navigation" }),
+    ).toHaveLength(0);
 
     fireEvent.click(hamburger);
     expect(
-      screen.getByRole("button", { name: "Open navigation" }).getAttribute("aria-expanded"),
+      screen
+        .getByRole("button", { name: "Open navigation" })
+        .getAttribute("aria-expanded"),
     ).toBe("true");
 
-    const dismissals = screen.getAllByRole("button", { name: "Close navigation" });
+    const dismissals = screen.getAllByRole("button", {
+      name: "Close navigation",
+    });
     expect(dismissals.length).toBeGreaterThan(0);
     fireEvent.click(dismissals[0] as HTMLElement);
 
-    expect(screen.queryAllByRole("button", { name: "Close navigation" })).toHaveLength(0);
+    expect(
+      screen.queryAllByRole("button", { name: "Close navigation" }),
+    ).toHaveLength(0);
   });
 });

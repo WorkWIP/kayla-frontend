@@ -573,7 +573,7 @@ export function SidebarNav({ user, mobileOpen = false, onMobileClose }: SidebarN
       ) : null}
 
       <nav
-        aria-label="Kayla Health dashboard"
+        aria-label={`${orgName ?? BRAND_NAME} dashboard`}
         className={[
           // Flush to the viewport edge and full height: the rail *is* the left edge of the
           // application now, not a floating card sitting on a padded page. So: no outer radius,
